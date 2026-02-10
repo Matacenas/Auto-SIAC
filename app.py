@@ -34,30 +34,26 @@ def get_gspread_client():
 async def check_siac_single(browser_context, microchip):
     page = await browser_context.new_page()
     try:
-        # Optimization: use 'domcontentloaded' for faster start, and reduced timeout
-        await page.goto(SITE_URL, timeout=45000, wait_until="domcontentloaded")
+        # Back to networkidle for safety
+        await page.goto(SITE_URL, timeout=60000, wait_until="networkidle")
         
-        # Identify and fill input faster
+        # Wait for any input (usually the microchip search)
+        input_field = await page.wait_for_selector("input", timeout=15000)
+        
         await page.evaluate("""
-            (chip) => {
+            () => {
                 const inputs = Array.from(document.querySelectorAll('input'));
                 const target = inputs.find(i => i.placeholder && i.placeholder.toLowerCase().includes('transponder')) || inputs[0];
-                target.value = chip;
-                target.dispatchEvent(new Event('input', { bubbles: true }));
-                target.dispatchEvent(new Event('change', { bubbles: true }));
-                target.blur(); // Trigger validation
+                target.value = '';
+                target.focus();
             }
-        """, str(microchip))
+        """)
         
-        # Optimization: instead of a fixed sleep, wait for any of the result indicators
-        try:
-            await page.wait_for_function(f"""
-                () => document.body.innerText.includes("{TEXT_REGISTERED}") || 
-                      document.body.innerText.includes("{TEXT_NOT_REGISTERED}") ||
-                      document.body.innerText.includes("{TEXT_MISSING}")
-            """, timeout=8000)
-        except:
-            pass # Fallback to content check
+        # Use keyboard.type as it's more reliable for triggering site listeners
+        await page.keyboard.type(str(microchip), delay=100)
+        
+        # Conservative wait for the dynamic result to appear
+        await asyncio.sleep(4.0)
             
         content = await page.content()
         
@@ -88,24 +84,17 @@ async def process_list(microchips):
             
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
-        # Parallel processing in batches of 2 for safety on Streamlit Cloud
-        batch_size = 2
-        for i in range(0, len(microchips), batch_size):
-            batch = microchips[i : i + batch_size]
-            cleaned_batch = []
-            for chip in batch:
-                c = str(chip).strip().split('.')[0]
-                cleaned_batch.append(c if c and c != "nan" else "")
-
-            status_text.text(f"A validar {i+1} a {min(i+batch_size, len(microchips))}/{len(microchips)}...")
-            
-            tasks = [check_siac_single(context, c) if c else asyncio.sleep(0.1) for c in cleaned_batch]
-            batch_results = await asyncio.gather(*tasks)
-            
-            for res in batch_results:
-                results.append(res if res else "N/A")
-            
-            progress_bar.progress(min(1.0, (i + batch_size) / len(microchips)))
+        # Back to sequential processing for maximum stability
+        for i, chip in enumerate(microchips):
+            cleaned_chip = str(chip).strip().split('.')[0]
+            if not cleaned_chip or cleaned_chip == "nan" or cleaned_chip == "":
+                results.append("N/A")
+                continue
+                
+            status_text.text(f"A validar {i+1}/{len(microchips)}: {cleaned_chip}")
+            res = await check_siac_single(context, cleaned_chip)
+            results.append(res)
+            progress_bar.progress((i + 1) / len(microchips))
             
         await browser.close()
     return results
@@ -195,7 +184,7 @@ with tab_gsheet:
                         if i < len(femeas): interleaved_chips.append(femeas[i])
                         if i < len(crias): interleaved_chips.append(crias[i])
 
-                    with st.spinner("A validar toda a lista no SIAC (Ordem: F2, G2, F3, G3...)..."):
+                    with st.spinner("A validar toda a lista (Sequencialmente par-a-par)..."):
                         results = asyncio.run(process_list(interleaved_chips))
                     
                     # De-interleave results back to F and G
