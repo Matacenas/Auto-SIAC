@@ -109,7 +109,10 @@ tab_gsheet, tab_file = st.tabs(["📊 Google Sheets", "📂 Arquivo (Excel/CSV)"
 
 with tab_gsheet:
     st.subheader("Integração Google Sheets")
-    gsheet_url = st.text_input("Link do Google Sheet", help="Partilhe a folha como Editor com o email da nota abaixo.")
+    
+    st.info("💡 **DICA:** Partilhe a folha como **Editor** com o email: `teste-sql@arcane-rigging-486715-n6.iam.gserviceaccount.com` para que a automação consiga ler e gravar os dados.")
+    
+    gsheet_url = st.text_input("Link do Google Sheet")
     
     col1, col2 = st.columns(2)
     with col1:
@@ -154,15 +157,49 @@ with tab_gsheet:
                     crias = st.session_state.temp_crias
                     url = st.session_state.gsheet_attached
                     
+                    # 1. Local Alerts Logic
+                    local_alerts_f = []
+                    local_alerts_c = []
+                    
+                    # Track duplicates in Crias
+                    cria_counts = {}
+                    for idx, c in enumerate(crias):
+                        chip = str(c).strip().split('.')[0]
+                        if chip and chip != "nan" and chip != "":
+                            if chip in cria_counts:
+                                cria_counts[chip].append(idx + 2) # +2 for sheet row
+                            else:
+                                cria_counts[chip] = [idx + 2]
+
+                    # Process Femeas and Crias together for SIAC but handle internal alerts
                     all_chips = femeas + crias
                     with st.spinner("A validar toda a lista no SIAC..."):
-                        # Use a dedicated loop if asyncio.run gives issues in nested threads
-                        results = asyncio.run(process_list(all_chips))
+                        siac_results = asyncio.run(process_list(all_chips))
                     
-                    # Split results
+                    # Split back and merge with alerts
                     num_f = len(femeas)
-                    res_f = [[r] for r in results[:num_f]]
-                    res_c = [[r] for r in results[num_f:]]
+                    siac_f = siac_results[:num_f]
+                    siac_c = siac_results[num_f:]
+                    
+                    final_res_f = []
+                    final_res_c = []
+                    
+                    for i in range(max(len(femeas), len(crias))):
+                        f_chip = str(femeas[i]).strip().split('.')[0] if i < len(femeas) else ""
+                        c_chip = str(crias[i]).strip().split('.')[0] if i < len(crias) else ""
+                        
+                        # Femea Result
+                        f_res = siac_f[i] if i < len(siac_f) else ""
+                        if f_chip != "" and f_chip == c_chip:
+                            f_res = f"⚠️ Cria e Fêmea = | {f_res}"
+                        final_res_f.append([f_res])
+                        
+                        # Cria Result
+                        c_res = siac_c[i] if i < len(siac_c) else ""
+                        if c_chip != "" and c_chip in cria_counts and len(cria_counts[c_chip]) > 1:
+                            others = [str(r) for r in cria_counts[c_chip] if r != i + 2]
+                            c_res = f"⚠️ Repetido com a linha nº{', '.join(others)} | {c_res}"
+                        final_res_c.append([c_res])
                     
                     gc = get_gspread_client()
                     if gc:
@@ -170,10 +207,10 @@ with tab_gsheet:
                         worksheet = sh.get_worksheet(0)
                         
                         # Write back to H (8) and I (9)
-                        if res_f:
-                            worksheet.update(range_name=f"H2:H{1+len(res_f)}", values=res_f)
-                        if res_c:
-                            worksheet.update(range_name=f"I2:I{1+len(res_c)}", values=res_c)
+                        if final_res_f:
+                            worksheet.update(range_name=f"H2:H{1+len(final_res_f)}", values=final_res_f)
+                        if final_res_c:
+                            worksheet.update(range_name=f"I2:I{1+len(final_res_c)}", values=final_res_c)
                         
                         st.success("✅ Folha atualizada! Verifique as colunas H e I.")
                         st.balloons()
@@ -196,16 +233,46 @@ with tab_file:
         
         if st.button("🚀 Iniciar Validação em Massa"):
             with st.spinner("A validar microchips..."):
-                femeas = df[col_f].tolist()
-                crias = df[col_g].tolist()
+                femeas_raw = df[col_f].tolist()
+                crias_raw = df[col_g].tolist()
                 
-                # Process all
-                all_to_validate = [str(c) for c in femeas] + [str(c) for c in crias]
-                results = asyncio.run(process_list(all_to_validate))
+                # Internal alerts for File
+                cria_counts = {}
+                for idx, c in enumerate(crias_raw):
+                    chip = str(c).strip().split('.')[0]
+                    if chip and chip != "nan" and chip != "":
+                        if chip in cria_counts:
+                            cria_counts[chip].append(idx + 2)
+                        else:
+                            cria_counts[chip] = [idx + 2]
                 
-                # Split back
-                df[f'Resultado SIAC_{col_f}'] = results[:len(femeas)]
-                df[f'Resultado SIAC_{col_g}'] = results[len(femeas):]
+                # Combine for SIAC
+                all_to_validate = [str(c) for c in femeas_raw] + [str(c) for c in crias_raw]
+                siac_results = asyncio.run(process_list(all_to_validate))
+                
+                siac_f = siac_results[:len(femeas_raw)]
+                siac_c = siac_results[len(femeas_raw):]
+                
+                final_f = []
+                final_c = []
+                
+                for i in range(len(df)):
+                    f_chip = str(femeas_raw[i]).strip().split('.')[0]
+                    c_chip = str(crias_raw[i]).strip().split('.')[0]
+                    
+                    res_f = siac_f[i]
+                    if f_chip != "" and f_chip == c_chip:
+                        res_f = f"⚠️ Cria e Fêmea = | {res_f}"
+                    final_f.append(res_f)
+                    
+                    res_c = siac_c[i]
+                    if c_chip != "" and c_chip in cria_counts and len(cria_counts[c_chip]) > 1:
+                        others = [str(r) for r in cria_counts[c_chip] if r != i + 2]
+                        res_c = f"⚠️ Repetido com a linha nº{', '.join(others)} | {res_c}"
+                    final_c.append(res_c)
+                
+                df[f'Resultado SIAC_{col_f}'] = final_f
+                df[f'Resultado SIAC_{col_g}'] = final_c
                 
                 st.success("Concluído!")
                 st.dataframe(df)
@@ -223,4 +290,4 @@ with tab_file:
                 )
 
 st.divider()
-st.caption("Nota: Partilhe a folha com: teste-sql@arcane-rigging-486715-n6.iam.gserviceaccount.com")
+st.caption("Auto SIAC Pro - Validação Inteligente")
