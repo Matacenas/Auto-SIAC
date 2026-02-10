@@ -12,18 +12,18 @@ st.set_page_config(page_title="Validador SIAC Pro", page_icon="🐾", layout="wi
 
 # Constants
 SITE_URL = "https://www.siac.pt/pt"
-RESULT_SUCCESS_TEXT = "Animal com registo no SIAC"
+# SIAC Text Detectors based on user requirements
+TEXT_REGISTERED = "Animal com registo no SIAC"
+TEXT_NOT_REGISTERED = "Animal sem registo"
+TEXT_MISSING = "Animal com registo no SIAC e que se encontra desaparecido"
 
 # Authenticate with Google Sheets
 def get_gspread_client():
     if "gcp_service_account" in st.secrets:
-        # For Streamlit Cloud secrets
         creds_dict = dict(st.secrets["gcp_service_account"])
-        # Fix private key escaping if needed
         if "\\n" in creds_dict["private_key"]:
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
     else:
-        # Local fallback
         st.error("Credenciais do Google (Service Account) não encontradas nos Secrets.")
         return None
 
@@ -34,11 +34,9 @@ def get_gspread_client():
 async def check_siac_single(browser_context, microchip):
     page = await browser_context.new_page()
     try:
-        await page.goto(SITE_URL, timeout=60000)
-        # Find the input field for transponder
+        await page.goto(SITE_URL, timeout=60000, wait_until="networkidle")
         input_field = await page.wait_for_selector("input", timeout=15000)
         
-        # More robust input detection
         await page.evaluate("""
             (chip) => {
                 const inputs = Array.from(document.querySelectorAll('input'));
@@ -49,13 +47,19 @@ async def check_siac_single(browser_context, microchip):
         """, str(microchip))
         
         await page.keyboard.type(str(microchip), delay=50)
-        await asyncio.sleep(2.5) # Wait for dynamic validation
+        await asyncio.sleep(3.0) # Wait for dynamic validation
         
         content = await page.content()
-        if RESULT_SUCCESS_TEXT in content:
-            return "✅ Registado no SIAC"
+        
+        # Priority: Check for "Missing" first as it contains the string of "Registered"
+        if TEXT_MISSING in content:
+            return "🚩 DESAPARECIDO"
+        elif TEXT_REGISTERED in content:
+            return "✅ REGISTADO"
+        elif TEXT_NOT_REGISTERED in content:
+            return "❌ SEM REGISTO"
         else:
-            return "❌ Não Registado"
+            return "❓ Desconhecido/Erro"
     except Exception as e:
         return f"⚠️ Erro: {str(e)}"
     finally:
@@ -67,23 +71,22 @@ async def process_list(microchips):
     status_text = st.empty()
     
     async with async_playwright() as p:
-        # Important for Streamlit Cloud: handle browser installation
         try:
             browser = await p.chromium.launch(headless=True)
         except:
-            # Try to install if not found (though packages.txt handles this usually)
             os.system("playwright install chromium")
             browser = await p.chromium.launch(headless=True)
             
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
         for i, chip in enumerate(microchips):
-            if not chip or pd.isna(chip) or str(chip).strip() == "":
+            cleaned_chip = str(chip).strip().split('.')[0] # Remove potential .0 from numbers
+            if not cleaned_chip or cleaned_chip == "nan" or cleaned_chip == "":
                 results.append("N/A")
                 continue
                 
-            status_text.text(f"A validar {i+1}/{len(microchips)}: {chip}")
-            res = await check_siac_single(context, str(int(float(chip))) if isinstance(chip, (float, int)) else str(chip))
+            status_text.text(f"A validar {i+1}/{len(microchips)}: {cleaned_chip}")
+            res = await check_siac_single(context, cleaned_chip)
             results.append(res)
             progress_bar.progress((i + 1) / len(microchips))
             
@@ -91,77 +94,93 @@ async def process_list(microchips):
     return results
 
 # UI
-st.title("🐾 Validador Automático SIAC")
+st.title("🐾 Validador Automático SIAC Pro")
 st.markdown("""
-Esta ferramenta valida números de microchips diretamente no portal SIAC. 
-Os resultados são atualizados automaticamente no Google Sheets.
+Valide números de microchips no portal SIAC. Resultados automáticos para **Fêmea** e **Cria**.
 """)
 
-tab_gsheet, tab_excel = st.tabs(["📊 Google Sheets", "Excel Upload"])
+# Initialize session state for results if not exists
+if 'siac_results_femea' not in st.session_state:
+    st.session_state.siac_results_femea = []
+if 'siac_results_cria' not in st.session_state:
+    st.session_state.siac_results_cria = []
+
+tab_gsheet, tab_file = st.tabs(["📊 Google Sheets", "📂 Arquivo (Excel/CSV)"])
 
 with tab_gsheet:
-    st.subheader("Configuração Google Sheets")
-    gsheet_url = st.text_input("Link do Google Sheet", help="Certifique-se que partilhou a folha com o email da Service Account.")
+    st.subheader("Integração Google Sheets")
+    gsheet_url = st.text_input("Link do Google Sheet", help="Partilhe a folha como Editor com o email da nota abaixo.")
     
-    if st.button("Validar do Google Sheets"):
-        if not gsheet_url:
-            st.error("Por favor, insira o link do Google Sheets.")
-        else:
-            try:
-                gc = get_gspread_client()
-                if gc:
-                    sh = gc.open_by_url(gsheet_url)
-                    worksheet = sh.get_worksheet(0) # Primeira aba
-                    data = pd.DataFrame(worksheet.get_all_records())
-                    
-                    if data.empty:
-                        # Fallback if no headers
-                        raw_data = worksheet.get_all_values()
-                        data = pd.DataFrame(raw_data[1:], columns=raw_data[0]) if raw_data else pd.DataFrame()
-
-                    st.info(f"Ficheiro aberto: {sh.title}")
-                    
-                    # Target columns F (index 6) and G (index 7)
-                    col_f_vals = worksheet.col_values(6)[1:] # Col F (Femea)
-                    col_g_vals = worksheet.col_values(7)[1:] # Col G (Cria)
-                    
-                    chips = col_f_vals + col_g_vals
-                    chips = [str(c).strip() for c in chips if str(c).strip() != ""]
-                    
-                    if not chips:
-                        st.warning("Nenhum microchip encontrado nas colunas F ou G.")
-                    else:
-                        st.write(f"Encontrados {len(chips)} números para validar.")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔍 1. Ler Dados e Mostrar"):
+            if not gsheet_url:
+                st.error("Insira o link!")
+            else:
+                try:
+                    gc = get_gspread_client()
+                    if gc:
+                        sh = gc.open_by_url(gsheet_url)
+                        worksheet = sh.get_worksheet(0)
                         
-                        if st.button("🚀 Iniciar Validação e Gravar na Folha"):
-                            with st.spinner("A validar microchips no SIAC..."):
-                                results_list = asyncio.run(process_list(chips))
-                                st.session_state.siac_results = results_list
-                            
-                            st.info("A gravar resultados de volta no Google Sheets...")
-                            
-                            results = st.session_state.siac_results
-                            # Update Femea Results (Col H)
-                            num_femea = len(col_f_vals)
-                            femea_results = [[r] for r in results[:num_femea]]
-                            if femea_results:
-                                worksheet.update(range_name=f"H2:H{1+num_femea}", values=femea_results)
-                            
-                            # Update Cria Results (Col I)
-                            cria_results = [[r] for r in results[num_femea:]]
-                            if cria_results:
-                                worksheet.update(range_name=f"I2:I{1+len(cria_results)}", values=cria_results)
-                            
-                            st.success("✅ Folha atualizada com sucesso nas colunas H e I!")
-                            
-                            # Display summary
-                            res_df = pd.DataFrame({"Microchip": chips, "Status": results})
-                            st.table(res_df.head(20))
+                        # Columns F (6) and G (7)
+                        femeas = worksheet.col_values(6)[1:]
+                        crias = worksheet.col_values(7)[1:]
+                        
+                        st.session_state.temp_femeas = femeas
+                        st.session_state.temp_crias = crias
+                        st.session_state.gsheet_attached = gsheet_url
+                        st.success(f"Dados lidos! Fêmeas: {len(femeas)} | Crias: {len(crias)}")
+                        
+                        max_len = max(len(femeas), len(crias))
+                        femeas_padded = femeas + [""] * (max_len - len(femeas))
+                        crias_padded = crias + [""] * (max_len - len(crias))
+                        
+                        preview_df = pd.DataFrame({
+                            "Fêmea (Col F)": femeas_padded,
+                            "Cria (Col G)": crias_padded
+                        })
+                        st.table(preview_df.head(10))
+                except Exception as e:
+                    st.error(f"Erro ao ler folha: {e}")
 
-            except Exception as e:
-                st.error(f"Erro ao aceder ao Google Sheets: {e}")
+    with col2:
+        if st.button("🚀 2. Validar e Gravar na Folha"):
+            if 'temp_femeas' not in st.session_state:
+                st.warning("Primeiro, clique em 'Ler Dados'.")
+            else:
+                try:
+                    femeas = st.session_state.temp_femeas
+                    crias = st.session_state.temp_crias
+                    url = st.session_state.gsheet_attached
+                    
+                    all_chips = femeas + crias
+                    with st.spinner("A validar toda a lista no SIAC..."):
+                        # Use a dedicated loop if asyncio.run gives issues in nested threads
+                        results = asyncio.run(process_list(all_chips))
+                    
+                    # Split results
+                    num_f = len(femeas)
+                    res_f = [[r] for r in results[:num_f]]
+                    res_c = [[r] for r in results[num_f:]]
+                    
+                    gc = get_gspread_client()
+                    if gc:
+                        sh = gc.open_by_url(url)
+                        worksheet = sh.get_worksheet(0)
+                        
+                        # Write back to H (8) and I (9)
+                        if res_f:
+                            worksheet.update(range_name=f"H2:H{1+len(res_f)}", values=res_f)
+                        if res_c:
+                            worksheet.update(range_name=f"I2:I{1+len(res_c)}", values=res_c)
+                        
+                        st.success("✅ Folha atualizada! Verifique as colunas H e I.")
+                        st.balloons()
+                except Exception as e:
+                    st.error(f"Erro ao gravar: {e}")
 
-with tab_excel:
+with tab_file:
     uploaded_file = st.file_uploader("Escolha um ficheiro Excel ou CSV", type=["xlsx", "csv"])
     if uploaded_file:
         if uploaded_file.name.endswith('.csv'):
@@ -172,28 +191,36 @@ with tab_excel:
         st.write("Pré-visualização:")
         st.dataframe(df.head())
         
-        column = st.selectbox("Selecione a coluna com os microchips", df.columns)
+        col_f = st.selectbox("Coluna da Fêmea", df.columns, index=min(5, len(df.columns)-1))
+        col_g = st.selectbox("Coluna da Cria", df.columns, index=min(6, len(df.columns)-1))
         
-        if st.button("Iniciar Validação (Ficheiro)"):
-            chips = df[column].tolist()
-            results = asyncio.run(process_list(chips))
-            df['Resultado SIAC'] = results
-            
-            st.success("Processamento concluído!")
-            st.dataframe(df)
-            
-            # Use IO to create excel for download 
-            import io
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False)
-            
-            st.download_button(
-                label="📥 Download Resultados (Excel)",
-                data=buffer.getvalue(),
-                file_name="siac_validado.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        if st.button("🚀 Iniciar Validação em Massa"):
+            with st.spinner("A validar microchips..."):
+                femeas = df[col_f].tolist()
+                crias = df[col_g].tolist()
+                
+                # Process all
+                all_to_validate = [str(c) for c in femeas] + [str(c) for c in crias]
+                results = asyncio.run(process_list(all_to_validate))
+                
+                # Split back
+                df[f'Resultado SIAC_{col_f}'] = results[:len(femeas)]
+                df[f'Resultado SIAC_{col_g}'] = results[len(femeas):]
+                
+                st.success("Concluído!")
+                st.dataframe(df)
+                
+                import io
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    df.to_excel(writer, index=False)
+                
+                st.download_button(
+                    label="📥 Download Resultados (Excel)",
+                    data=buffer.getvalue(),
+                    file_name="siac_validado.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
 st.divider()
 st.caption("Nota: Partilhe a folha com: teste-sql@arcane-rigging-486715-n6.iam.gserviceaccount.com")
