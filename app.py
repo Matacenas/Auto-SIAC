@@ -121,24 +121,15 @@ with tab_gsheet:
 
                     st.info(f"Ficheiro aberto: {sh.title}")
                     
-                    # Target columns E (index 4) and F (index 5)
-                    # Let's check columns
-                    cols = worksheet.row_values(1)
-                    st.write(f"Colunas detetadas: {', '.join(cols)}")
+                    # Target columns F (index 6) and G (index 7)
+                    col_f_vals = worksheet.col_values(6)[1:] # Col F (Femea)
+                    col_g_vals = worksheet.col_values(7)[1:] # Col G (Cria)
                     
-                    # Columns E and F are likely Female and Cria
-                    # We'll ask user to confirm or just use indexes
-                    to_validate = []
-                    # Column E = index 5 (1-based for gspread is tricky, 0-based index 4)
-                    # In gspread worksheet.col_values(5) is Col E
-                    col_e_vals = worksheet.col_values(5)[1:] # Skip header
-                    col_f_vals = worksheet.col_values(6)[1:] # Skip header
-                    
-                    chips = col_e_vals + col_f_vals
-                    chips = [c for c in chips if c.strip() != ""]
+                    chips = col_f_vals + col_g_vals
+                    chips = [str(c).strip() for c in chips if str(c).strip() != ""]
                     
                     if not chips:
-                        st.warning("Nenhum microchip encontrado nas colunas E ou F.")
+                        st.warning("Nenhum microchip encontrado nas colunas F ou G.")
                     else:
                         st.write(f"Encontrados {len(chips)} números para validar.")
                         
@@ -150,18 +141,18 @@ with tab_gsheet:
                             st.info("A gravar resultados de volta no Google Sheets...")
                             
                             results = st.session_state.siac_results
-                            # Update Femea Results (Col G)
-                            num_femea = len(col_e_vals)
+                            # Update Femea Results (Col H)
+                            num_femea = len(col_f_vals)
                             femea_results = [[r] for r in results[:num_femea]]
                             if femea_results:
-                                worksheet.update(range_name=f"G2:G{1+num_femea}", values=femea_results)
+                                worksheet.update(range_name=f"H2:H{1+num_femea}", values=femea_results)
                             
-                            # Update Cria Results (Col H)
+                            # Update Cria Results (Col I)
                             cria_results = [[r] for r in results[num_femea:]]
                             if cria_results:
-                                worksheet.update(range_name=f"H2:H{1+len(cria_results)}", values=cria_results)
+                                worksheet.update(range_name=f"I2:I{1+len(cria_results)}", values=cria_results)
                             
-                            st.success("✅ Folha atualizada com sucesso!")
+                            st.success("✅ Folha atualizada com sucesso nas colunas H e I!")
                             
                             # Display summary
                             res_df = pd.DataFrame({"Microchip": chips, "Status": results})
@@ -171,15 +162,19 @@ with tab_gsheet:
                 st.error(f"Erro ao aceder ao Google Sheets: {e}")
 
 with tab_excel:
-    uploaded_file = st.file_uploader("Escolha um ficheiro Excel", type=["xlsx"])
+    uploaded_file = st.file_uploader("Escolha um ficheiro Excel ou CSV", type=["xlsx", "csv"])
     if uploaded_file:
-        df = pd.read_excel(uploaded_file)
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
+            
         st.write("Pré-visualização:")
         st.dataframe(df.head())
         
         column = st.selectbox("Selecione a coluna com os microchips", df.columns)
         
-        if st.button("Iniciar Validação (Excel)"):
+        if st.button("Iniciar Validação (Ficheiro)"):
             chips = df[column].tolist()
             results = asyncio.run(process_list(chips))
             df['Resultado SIAC'] = results
@@ -187,14 +182,14 @@ with tab_excel:
             st.success("Processamento concluído!")
             st.dataframe(df)
             
-            # Use IO to create excel for download without saving to disk
+            # Use IO to create excel for download 
             import io
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 df.to_excel(writer, index=False)
             
             st.download_button(
-                label="📥 Download Excel com Resultados",
+                label="📥 Download Resultados (Excel)",
                 data=buffer.getvalue(),
                 file_name="siac_validado.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
