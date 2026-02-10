@@ -171,20 +171,32 @@ with tab_gsheet:
                             else:
                                 cria_counts[chip] = [idx + 2]
 
-                    # Process Femeas and Crias together for SIAC but handle internal alerts
-                    all_chips = femeas + crias
-                    with st.spinner("A validar toda a lista no SIAC..."):
-                        siac_results = asyncio.run(process_list(all_chips))
+                    # Interleave chips for row-by-row validation (F2, G2, F3, G3...)
+                    interleaved_chips = []
+                    num_rows = max(len(femeas), len(crias))
+                    for i in range(num_rows):
+                        if i < len(femeas): interleaved_chips.append(femeas[i])
+                        if i < len(crias): interleaved_chips.append(crias[i])
+
+                    with st.spinner("A validar toda a lista no SIAC (Ordem: F2, G2, F3, G3...)..."):
+                        results = asyncio.run(process_list(interleaved_chips))
                     
-                    # Split back and merge with alerts
-                    num_f = len(femeas)
-                    siac_f = siac_results[:num_f]
-                    siac_c = siac_results[num_f:]
+                    # De-interleave results back to F and G
+                    siac_f = []
+                    siac_c = []
+                    idx = 0
+                    for i in range(num_rows):
+                        if i < len(femeas):
+                            siac_f.append(results[idx])
+                            idx += 1
+                        if i < len(crias):
+                            siac_c.append(results[idx])
+                            idx += 1
                     
                     final_res_f = []
                     final_res_c = []
                     
-                    for i in range(max(len(femeas), len(crias))):
+                    for i in range(num_rows):
                         f_chip = str(femeas[i]).strip().split('.')[0] if i < len(femeas) else ""
                         c_chip = str(crias[i]).strip().split('.')[0] if i < len(crias) else ""
                         
@@ -246,12 +258,16 @@ with tab_file:
                         else:
                             cria_counts[chip] = [idx + 2]
                 
-                # Combine for SIAC
-                all_to_validate = [str(c) for c in femeas_raw] + [str(c) for c in crias_raw]
-                siac_results = asyncio.run(process_list(all_to_validate))
+                # Interleave for row-by-row validation
+                interleaved_chips = []
+                for f, c in zip(femeas_raw, crias_raw):
+                    interleaved_chips.append(f)
+                    interleaved_chips.append(c)
                 
-                siac_f = siac_results[:len(femeas_raw)]
-                siac_c = siac_results[len(femeas_raw):]
+                siac_results = asyncio.run(process_list(interleaved_chips))
+                
+                siac_f = [siac_results[i*2] for i in range(len(femeas_raw))]
+                siac_c = [siac_results[i*2+1] for i in range(len(femeas_raw))]
                 
                 final_f = []
                 final_c = []
