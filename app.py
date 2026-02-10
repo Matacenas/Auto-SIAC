@@ -226,10 +226,38 @@ with tab_file:
             full_list = []
             for f, c in zip(f_list, c_list): full_list.extend([f, c])
             
-            raw = asyncio.run(process_list(full_list))
+            with st.spinner("Processando..."):
+                raw = asyncio.run(process_list(full_list))
             
-            df[f'SIAC_{col_f}'] = [raw[i*2] for i in range(len(f_list))]
-            df[f'SIAC_{col_c}'] = [raw[i*2+1] for i in range(len(f_list))]
+            # Alerts Logic (Duplicates in Cria)
+            c_counts = {}
+            for i, v in enumerate(c_list):
+                c = str(v).strip().split('.')[0]
+                if c and c != "nan":
+                    if c in c_counts: c_counts[c].append(i+2) # +2 to match sheet row style
+                    else: c_counts[c] = [i+2]
+            
+            final_f, final_c = [], []
+            for i in range(len(f_list)):
+                f_chip = str(f_list[i]).strip().split('.')[0]
+                c_chip = str(c_list[i]).strip().split('.')[0]
+                res_f, res_c = raw[i*2], raw[i*2+1]
+                
+                # Equality alert
+                if f_chip != "" and f_chip == c_chip:
+                    res_f = f"⚠️ Cria e Fêmea = | {res_f}"
+                    res_c = f"⚠️ Cria e Fêmea = | {res_c}"
+                
+                # Duplicate alert (Cria only)
+                if c_chip != "" and c_chip in c_counts and len(c_counts[c_chip]) > 1:
+                    others = [str(r) for r in c_counts[c_chip] if r != i + 2]
+                    res_c = f"⚠️ Repetido com a linha nº{', '.join(others)} | {res_c}"
+                
+                final_f.append(res_f)
+                final_c.append(res_c)
+            
+            df[f'SIAC_{col_f}'] = final_f
+            df[f'SIAC_{col_c}'] = final_c
             
             st.success("Processado!")
             st.dataframe(df)
