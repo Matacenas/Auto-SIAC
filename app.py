@@ -94,7 +94,7 @@ async def process_list(microchips):
             if not cleaned or cleaned == "nan" or cleaned == "":
                 results.append("N/A")
             else:
-                status_text.text(f"🔍 Validando {i+1}/{total}: {cleaned}")
+                status_text.text(f"🔍 Nº {i+1}/{total}: {cleaned}")
                 res = await check_siac_single(context, cleaned)
                 results.append(res)
             
@@ -105,14 +105,14 @@ async def process_list(microchips):
 
 # --- UI LOGIC ---
 
-st.title("🐾 Validador Automático SIAC")
-st.markdown("Interface estável para validação de microchips.")
+st.title("🐾 Validação Automática SIAC")
+st.markdown("Interface para validação de números de identificação de cães/gatos.")
 
 tab_gsheet, tab_file = st.tabs(["📊 Google Sheets", "📂 Arquivo Excel/CSV"])
 
 with tab_gsheet:
     st.subheader("Integração Google Sheets")
-    st.info("💡 **MUITO IMPORTANTE:** Partilhe a folha como **Editor** com: `teste-sql@arcane-rigging-486715-n6.iam.gserviceaccount.com`")
+    st.info("💡 **MUITO IMPORTANTE:** Partilha a folha como **Editor** com: `teste-sql@arcane-rigging-486715-n6.iam.gserviceaccount.com`")
     
     gsheet_url = st.text_input("URL do Google Sheet")
     
@@ -160,7 +160,7 @@ with tab_gsheet:
                         if i < len(femeas): interleaved.append(femeas[i])
                         if i < len(crias): interleaved.append(crias[i])
                     
-                    with st.spinner("Processando (Modo Estável)..."):
+                    with st.spinner("A trabalhar..."):
                         raw_results = asyncio.run(process_list(interleaved))
                     
                     # De-interleave
@@ -241,4 +241,4 @@ with tab_file:
             st.download_button("📥 Baixar Excel", buffer.getvalue(), "siac_results.xlsx")
 
 st.divider()
-st.caption("Auto SIAC - Versão Estável v2.1")
+st.caption("Auto SIAC 2026")
