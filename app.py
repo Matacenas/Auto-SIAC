@@ -34,24 +34,33 @@ def get_gspread_client():
 async def check_siac_single(browser_context, microchip):
     page = await browser_context.new_page()
     try:
-        await page.goto(SITE_URL, timeout=60000, wait_until="networkidle")
-        input_field = await page.wait_for_selector("input", timeout=15000)
+        # Optimization: use 'domcontentloaded' for faster start, and reduced timeout
+        await page.goto(SITE_URL, timeout=45000, wait_until="domcontentloaded")
         
+        # Identify and fill input faster
         await page.evaluate("""
             (chip) => {
                 const inputs = Array.from(document.querySelectorAll('input'));
                 const target = inputs.find(i => i.placeholder && i.placeholder.toLowerCase().includes('transponder')) || inputs[0];
-                target.value = '';
-                target.focus();
+                target.value = chip;
+                target.dispatchEvent(new Event('input', { bubbles: true }));
+                target.dispatchEvent(new Event('change', { bubbles: true }));
+                target.blur(); // Trigger validation
             }
         """, str(microchip))
         
-        await page.keyboard.type(str(microchip), delay=50)
-        await asyncio.sleep(3.0) # Wait for dynamic validation
-        
+        # Optimization: instead of a fixed sleep, wait for any of the result indicators
+        try:
+            await page.wait_for_function(f"""
+                () => document.body.innerText.includes("{TEXT_REGISTERED}") || 
+                      document.body.innerText.includes("{TEXT_NOT_REGISTERED}") ||
+                      document.body.innerText.includes("{TEXT_MISSING}")
+            """, timeout=8000)
+        except:
+            pass # Fallback to content check
+            
         content = await page.content()
         
-        # Priority: Check for "Missing" first as it contains the string of "Registered"
         if TEXT_MISSING in content:
             return "🚩 DESAPARECIDO"
         elif TEXT_REGISTERED in content:
@@ -79,16 +88,24 @@ async def process_list(microchips):
             
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         
-        for i, chip in enumerate(microchips):
-            cleaned_chip = str(chip).strip().split('.')[0] # Remove potential .0 from numbers
-            if not cleaned_chip or cleaned_chip == "nan" or cleaned_chip == "":
-                results.append("N/A")
-                continue
-                
-            status_text.text(f"A validar {i+1}/{len(microchips)}: {cleaned_chip}")
-            res = await check_siac_single(context, cleaned_chip)
-            results.append(res)
-            progress_bar.progress((i + 1) / len(microchips))
+        # Parallel processing in batches of 2 for safety on Streamlit Cloud
+        batch_size = 2
+        for i in range(0, len(microchips), batch_size):
+            batch = microchips[i : i + batch_size]
+            cleaned_batch = []
+            for chip in batch:
+                c = str(chip).strip().split('.')[0]
+                cleaned_batch.append(c if c and c != "nan" else "")
+
+            status_text.text(f"A validar {i+1} a {min(i+batch_size, len(microchips))}/{len(microchips)}...")
+            
+            tasks = [check_siac_single(context, c) if c else asyncio.sleep(0.1) for c in cleaned_batch]
+            batch_results = await asyncio.gather(*tasks)
+            
+            for res in batch_results:
+                results.append(res if res else "N/A")
+            
+            progress_bar.progress(min(1.0, (i + batch_size) / len(microchips)))
             
         await browser.close()
     return results
@@ -200,17 +217,20 @@ with tab_gsheet:
                         f_chip = str(femeas[i]).strip().split('.')[0] if i < len(femeas) else ""
                         c_chip = str(crias[i]).strip().split('.')[0] if i < len(crias) else ""
                         
-                        # Femea Result
                         f_res = siac_f[i] if i < len(siac_f) else ""
+                        c_res = siac_c[i] if i < len(siac_c) else ""
+                        
+                        # Symmetric alert for Femea == Cria
                         if f_chip != "" and f_chip == c_chip:
                             f_res = f"⚠️ Cria e Fêmea = | {f_res}"
-                        final_res_f.append([f_res])
+                            c_res = f"⚠️ Cria e Fêmea = | {c_res}"
                         
-                        # Cria Result
-                        c_res = siac_c[i] if i < len(siac_c) else ""
+                        # Duplicate alert (Cria only as requested)
                         if c_chip != "" and c_chip in cria_counts and len(cria_counts[c_chip]) > 1:
                             others = [str(r) for r in cria_counts[c_chip] if r != i + 2]
                             c_res = f"⚠️ Repetido com a linha nº{', '.join(others)} | {c_res}"
+                            
+                        final_res_f.append([f_res])
                         final_res_c.append([c_res])
                     
                     gc = get_gspread_client()
@@ -277,14 +297,19 @@ with tab_file:
                     c_chip = str(crias_raw[i]).strip().split('.')[0]
                     
                     res_f = siac_f[i]
+                    res_c = siac_c[i]
+                    
+                    # Symmetric alert for Femea == Cria
                     if f_chip != "" and f_chip == c_chip:
                         res_f = f"⚠️ Cria e Fêmea = | {res_f}"
-                    final_f.append(res_f)
+                        res_c = f"⚠️ Cria e Fêmea = | {res_c}"
                     
-                    res_c = siac_c[i]
+                    # Duplicate alert (Cria only as requested)
                     if c_chip != "" and c_chip in cria_counts and len(cria_counts[c_chip]) > 1:
                         others = [str(r) for r in cria_counts[c_chip] if r != i + 2]
                         res_c = f"⚠️ Repetido com a linha nº{', '.join(others)} | {res_c}"
+                        
+                    final_f.append(res_f)
                     final_c.append(res_c)
                 
                 df[f'Resultado SIAC_{col_f}'] = final_f
