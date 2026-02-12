@@ -35,69 +35,90 @@ def get_gspread_client():
         st.error(f"Erro na autenticação: {e}")
         return None
 
-async def check_siac_on_page(page, microchip: str) -> str:
-    """Stable validation reusing the same page to avoid reloads."""
-    try:
-        # Select and clear input via evaluate to be sure
-        await page.evaluate("""
-            () => {
-                const inputs = Array.from(document.querySelectorAll('input'));
-                const target = inputs.find(i => i.placeholder && i.placeholder.toLowerCase().includes('transponder')) || inputs[0];
-                target.value = '';
-                target.focus();
-            }
-        """)
-        
-        # Real-time typing simulation
-        await page.keyboard.type(str(microchip), delay=60)
-        await page.keyboard.press("Enter") # Sometimes helps trigger search
-        
-        # Wait for the portal to process - adjusted for speed/stability
-        await asyncio.sleep(3.5)
+async def check_siac_on_page(page, microchip: str, retries: int = 2) -> str:
+    """Stable validation reusing the same page with retries."""
+    for attempt in range(retries + 1):
+        try:
+            # Select and clear input
+            await page.evaluate("""
+                () => {
+                    const inputs = Array.from(document.querySelectorAll('input'));
+                    const target = inputs.find(i => i.placeholder && i.placeholder.toLowerCase().includes('transponder')) || inputs[0];
+                    if (target) {
+                        target.value = '';
+                        target.focus();
+                    }
+                }
+            """)
             
-        content = await page.content()
-        
-        if TEXT_MISSING in content:
-            return "🚩 DESAPARECIDO"
-        elif TEXT_REGISTERED in content:
-            return "✅ REGISTADO"
-        elif TEXT_NOT_REGISTERED in content:
-            return "❌ SEM REGISTO"
-        else:
+            # Real-time typing simulation
+            await page.keyboard.type(str(microchip), delay=60)
+            await page.keyboard.press("Enter")
+            
+            # Wait for content change or processing
+            await asyncio.sleep(4.0)
+                
+            content = await page.content()
+            
+            if TEXT_MISSING in content:
+                return "🚩 DESAPARECIDO"
+            elif TEXT_REGISTERED in content:
+                return "✅ REGISTADO"
+            elif TEXT_NOT_REGISTERED in content:
+                return "❌ SEM REGISTO"
+            
+            # If no conclusive text found, maybe it's still loading or errored
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
+                
             return "❓ Desconhecido"
-    except Exception as e:
-        print(f"Erro no chip {microchip}: {e}")
-        return f"⚠️ Erro"
+        except Exception as e:
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
+            print(f"Erro persistente no chip {microchip}: {e}")
+            return f"⚠️ Erro"
+    return "⚠️ Erro"
 
-async def process_list_incremental(microchips: List[str], callback: Optional[Callable[[List[str]], Awaitable[None]]] = None, batch_size: int = 10) -> List[str]:
-    """Processes a list of chips with page reuse and optional batch callbacks."""
-    results: List[str] = []
+async def process_list_incremental(microchips: List[str], existing_results: Optional[List[str]] = None, callback: Optional[Callable[[List[str]], Awaitable[None]]] = None, batch_size: int = 10, refresh_every: int = 50) -> List[str]:
+    """Processes a list of chips with page reuse, periodic refresh and resume support."""
+    results: List[str] = list(existing_results) if existing_results else ["..."] * len(microchips)
     progress_bar = st.progress(0)
     status_text = st.empty()
-    
-    # Ensure it's a list for enumerate stability
     chips_list = list(microchips)
     
     async with async_playwright() as p:
-        try:
-            browser = await p.chromium.launch(headless=True)
-        except:
-            os.system("playwright install chromium")
-            browser = await p.chromium.launch(headless=True)
-            
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        page = await context.new_page()
-        
-        # Load the site once
-        try:
+        browser = None
+        context = None
+        page = None
+
+        async def init_browser():
+            nonlocal browser, context, page
+            if browser: await browser.close()
+            try:
+                browser = await p.chromium.launch(headless=True)
+            except:
+                os.system("playwright install chromium")
+                browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            page = await context.new_page()
             await page.goto(SITE_URL, timeout=60000, wait_until="networkidle")
-        except Exception as e:
-            st.error(f"Erro ao carregar o site: {e}")
-            await browser.close()
-            return ["⚠️ Erro Site"] * len(microchips)
+
+        await init_browser()
 
         total = len(chips_list)
         for i, chip in enumerate(chips_list):
+            # RESUME LOGIC: Skip if already has a conclusive result
+            if i < len(results) and any(icon in results[i] for icon in ["✅", "❌", "🚩"]):
+                progress_bar.progress((i + 1) / total)
+                continue
+
+            # PERIODIC REFRESH: Re-init browser every N items to prevent memory leaks/crashes
+            if i > 0 and i % refresh_every == 0:
+                status_text.text(f"♻️ A reiniciar navegador para estabilidade...")
+                await init_browser()
+
             cleaned = str(chip).strip().split('.')[0]
             if not cleaned or cleaned == "nan" or cleaned == "":
                 res = "N/A"
@@ -105,17 +126,18 @@ async def process_list_incremental(microchips: List[str], callback: Optional[Cal
                 status_text.text(f"🔍 Nº {i+1}/{total}: {cleaned}")
                 res = await check_siac_on_page(page, cleaned)
             
-            results.append(res)
+            if i < len(results): results[i] = res
+            else: results.append(res)
+            
             progress_bar.progress((i + 1) / total)
             
-            # Incremental update via callback
             if callback is not None and (i + 1) % batch_size == 0:
                 await callback(results)
             
-        if callback is not None: # Final callback for remaining
+        if callback is not None:
             await callback(results)
             
-        await browser.close()
+        if browser is not None: await browser.close()
     return results
 
 # --- UI LOGIC ---
@@ -144,9 +166,17 @@ with tab_gsheet:
                         worksheet = sh.get_worksheet(0)
                         femeas = worksheet.col_values(6)[1:]
                         crias = worksheet.col_values(7)[1:]
+                        # Read existing results for Resume feature
+                        try:
+                            res_f = worksheet.col_values(8)[1:]
+                            res_c = worksheet.col_values(9)[1:]
+                        except:
+                            res_f, res_c = [], []
                         
                         st.session_state.temp_femeas = femeas
                         st.session_state.temp_crias = crias
+                        st.session_state.temp_res_f = res_f
+                        st.session_state.temp_res_c = res_c
                         st.session_state.gs_url = gsheet_url
                         
                         st.success(f"Dados lidos! Fêmeas: {len(femeas)} | Crias: {len(crias)}")
@@ -166,14 +196,21 @@ with tab_gsheet:
                 try:
                     femeas = st.session_state.temp_femeas
                     crias = st.session_state.temp_crias
+                    res_f_init = st.session_state.temp_res_f
+                    res_c_init = st.session_state.temp_res_c
                     url = st.session_state.gs_url
                     rows = max(len(femeas), len(crias))
                     
                     # Interleaved list for processing
                     interleaved = []
+                    existing_interleaved = []
                     for i in range(rows):
-                        if i < len(femeas): interleaved.append(femeas[i])
-                        if i < len(crias): interleaved.append(crias[i])
+                        if i < len(femeas): 
+                            interleaved.append(femeas[i])
+                            existing_interleaved.append(res_f_init[i] if i < len(res_f_init) else "...")
+                        if i < len(crias): 
+                            interleaved.append(crias[i])
+                            existing_interleaved.append(res_c_init[i] if i < len(res_c_init) else "...")
                     
                     async def main_validation():
                         # Prepare counts for duplicate alert (Cria only)
@@ -225,7 +262,7 @@ with tab_gsheet:
                                 except Exception as e_sheet:
                                     print(f"Erro ao atualizar folha (batch): {e_sheet}")
 
-                        await process_list_incremental(interleaved, callback=update_sheet_callback, batch_size=20)
+                        await process_list_incremental(interleaved, existing_results=existing_interleaved, callback=update_sheet_callback, batch_size=20, refresh_every=50)
 
                     with st.spinner("A validar e a atualizar a folha em tempo real..."):
                         asyncio.run(main_validation())
