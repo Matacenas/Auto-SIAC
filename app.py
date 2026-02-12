@@ -153,9 +153,9 @@ with tab_gsheet:
     
     gsheet_url = st.text_input("URL do Google Sheet")
     
-    col_btn1, col_btn2 = st.columns(2)
+    col_btn1, col_btn2, col_btn3 = st.columns(3)
     with col_btn1:
-        if st.button("🔍 1. Ler Dados e Mostrar"):
+        if st.button("🔍 1. Ler Dados"):
             if not gsheet_url:
                 st.error("Insira o link!")
             else:
@@ -271,6 +271,39 @@ with tab_gsheet:
                     st.balloons()
                 except Exception as e:
                     st.error(f"Erro ao processar: {e}")
+
+    with col_btn3:
+        if st.button("🧹 3. Limpar Registados"):
+            if 'gs_url' not in st.session_state:
+                st.error("Primeiro insira o link e 'Ler Dados'.")
+            else:
+                try:
+                    url = st.session_state.gs_url
+                    gc = get_gspread_client()
+                    if gc:
+                        sh = gc.open_by_url(url)
+                        ws = sh.get_worksheet(0)
+                        
+                        with st.spinner("A analisar linhas para remoção..."):
+                            data = ws.get_all_values()
+                            # Columns H (index 7) and I (index 8)
+                            to_delete = []
+                            for i, row in enumerate(data[1:], start=2): # skip header, 1-indexed
+                                if len(row) > 8:
+                                    val_h = str(row[7]).strip()
+                                    val_i = str(row[8]).strip()
+                                    if val_h == "✅ REGISTADO" and val_i == "✅ REGISTADO":
+                                        to_delete.append(i)
+                            
+                            if not to_delete:
+                                st.info("Nenhuma linha encontrada para remoção (Ambas ✅ REGISTADO e sem alertas).")
+                            else:
+                                for row_idx in sorted(to_delete, reverse=True):
+                                    ws.delete_rows(row_idx)
+                                st.success(f"Removidas {len(to_delete)} linhas com sucesso!")
+                                st.balloons()
+                except Exception as e:
+                    st.error(f"Erro ao limpar: {e}")
 
 with tab_file:
     uploaded = st.file_uploader("Upload Excel/CSV", type=["xlsx", "csv"])
