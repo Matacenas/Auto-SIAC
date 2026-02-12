@@ -228,7 +228,10 @@ with tab_gsheet:
                             for i in range(rows):
                                 # Femea
                                 if i < len(femeas):
-                                    res = current_results[ptr] if ptr < len(current_results) else "..."
+                                    raw_res = current_results[ptr] if ptr < len(current_results) else "..."
+                                    # Clean old alerts
+                                    res = raw_res.split("|")[-1].strip()
+                                    
                                     f_chip = str(femeas[i]).strip().split('.')[0]
                                     c_chip = str(crias[i]).strip().split('.')[0] if i < len(crias) else ""
                                     # Alerts
@@ -239,7 +242,10 @@ with tab_gsheet:
                                 
                                 # Cria
                                 if i < len(crias):
-                                    res = current_results[ptr] if ptr < len(current_results) else "..."
+                                    raw_res = current_results[ptr] if ptr < len(current_results) else "..."
+                                    # Clean old alerts
+                                    res = raw_res.split("|")[-1].strip()
+                                    
                                     c_chip = str(crias[i]).strip().split('.')[0]
                                     f_chip = str(femeas[i]).strip().split('.')[0] if i < len(femeas) else ""
                                     # Alerts
