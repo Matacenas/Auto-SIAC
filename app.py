@@ -164,12 +164,12 @@ with tab_gsheet:
                     if gc:
                         sh = gc.open_by_url(gsheet_url)
                         worksheet = sh.get_worksheet(0)
-                        femeas = worksheet.col_values(6)[1:]
-                        crias = worksheet.col_values(7)[1:]
+                        femeas = worksheet.col_values(7)[1:]
+                        crias = worksheet.col_values(8)[1:]
                         # Read existing results for Resume feature
                         try:
-                            res_f = worksheet.col_values(8)[1:]
-                            res_c = worksheet.col_values(9)[1:]
+                            res_f = worksheet.col_values(9)[1:]
+                            res_c = worksheet.col_values(10)[1:]
                         except:
                             res_f, res_c = [], []
                         
@@ -182,8 +182,8 @@ with tab_gsheet:
                         st.success(f"Dados lidos! Fêmeas: {len(femeas)} | Crias: {len(crias)}")
                         max_len = max(len(femeas), len(crias))
                         st.table(pd.DataFrame({
-                            "Fêmea (F)": femeas + [""]*(max_len-len(femeas)),
-                            "Cria (G)": crias + [""]*(max_len-len(crias))
+                            "Fêmea (G)": femeas + [""]*(max_len-len(femeas)),
+                            "Cria (H)": crias + [""]*(max_len-len(crias))
                         }).head(10))
                 except Exception as e:
                     st.error(f"Erro ao ler: {e}")
@@ -263,8 +263,8 @@ with tab_gsheet:
                                 try:
                                     sh_internal = gc_internal.open_by_url(url)
                                     ws_internal = sh_internal.get_worksheet(0)
-                                    if siac_f: ws_internal.update(range_name=f"H2:H{1+len(siac_f)}", values=siac_f)
-                                    if siac_c: ws_internal.update(range_name=f"I2:I{1+len(siac_c)}", values=siac_c)
+                                    if siac_f: ws_internal.update(range_name=f"I2:I{1+len(siac_f)}", values=siac_f)
+                                    if siac_c: ws_internal.update(range_name=f"J2:J{1+len(siac_c)}", values=siac_c)
                                 except Exception as e_sheet:
                                     print(f"Erro ao atualizar folha (batch): {e_sheet}")
 
@@ -292,12 +292,12 @@ with tab_gsheet:
                         
                         with st.spinner("A analisar linhas para remoção..."):
                             data = ws.get_all_values()
-                            # Columns H (index 7) and I (index 8)
+                            # Columns I (index 8) and J (index 9)
                             to_delete = []
                             for i, row in enumerate(data[1:], start=2): # skip header, 1-indexed
-                                if len(row) > 8:
-                                    val_h = str(row[7]).strip()
-                                    val_i = str(row[8]).strip()
+                                if len(row) > 9:
+                                    val_h = str(row[8]).strip()
+                                    val_i = str(row[9]).strip()
                                     if val_h == "✅ REGISTADO" and val_i == "✅ REGISTADO":
                                         to_delete.append(i)
                             
