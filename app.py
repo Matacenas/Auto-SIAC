@@ -6,6 +6,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import os
 import time
+from typing import List, Optional, Callable, Awaitable
 
 # --- CONFIGURATION ---
 SITE_URL = "https://www.siac.pt/pt"
@@ -34,15 +35,10 @@ def get_gspread_client():
         st.error(f"Erro na autenticação: {e}")
         return None
 
-async def check_siac_single(browser_context, microchip):
-    """Stable sequential validation for a single microchip."""
-    page = await browser_context.new_page()
+async def check_siac_on_page(page, microchip: str) -> str:
+    """Stable validation reusing the same page to avoid reloads."""
     try:
-        # Stable navigation
-        await page.goto(SITE_URL, timeout=60000, wait_until="networkidle")
-        
-        # Select input field
-        await page.wait_for_selector("input", timeout=15000)
+        # Select and clear input via evaluate to be sure
         await page.evaluate("""
             () => {
                 const inputs = Array.from(document.querySelectorAll('input'));
@@ -53,10 +49,11 @@ async def check_siac_single(browser_context, microchip):
         """)
         
         # Real-time typing simulation
-        await page.keyboard.type(str(microchip), delay=100)
+        await page.keyboard.type(str(microchip), delay=60)
+        await page.keyboard.press("Enter") # Sometimes helps trigger search
         
-        # Fixed stable wait for the portal to process
-        await asyncio.sleep(4.0)
+        # Wait for the portal to process - adjusted for speed/stability
+        await asyncio.sleep(3.5)
             
         content = await page.content()
         
@@ -69,15 +66,17 @@ async def check_siac_single(browser_context, microchip):
         else:
             return "❓ Desconhecido"
     except Exception as e:
+        print(f"Erro no chip {microchip}: {e}")
         return f"⚠️ Erro"
-    finally:
-        await page.close()
 
-async def process_list(microchips):
-    """Processes a list of chips sequentially to ensure stability."""
-    results = []
+async def process_list_incremental(microchips: List[str], callback: Optional[Callable[[List[str]], Awaitable[None]]] = None, batch_size: int = 10) -> List[str]:
+    """Processes a list of chips with page reuse and optional batch callbacks."""
+    results: List[str] = []
     progress_bar = st.progress(0)
     status_text = st.empty()
+    
+    # Ensure it's a list for enumerate stability
+    chips_list = list(microchips)
     
     async with async_playwright() as p:
         try:
@@ -87,18 +86,34 @@ async def process_list(microchips):
             browser = await p.chromium.launch(headless=True)
             
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        page = await context.new_page()
         
-        total = len(microchips)
-        for i, chip in enumerate(microchips):
+        # Load the site once
+        try:
+            await page.goto(SITE_URL, timeout=60000, wait_until="networkidle")
+        except Exception as e:
+            st.error(f"Erro ao carregar o site: {e}")
+            await browser.close()
+            return ["⚠️ Erro Site"] * len(microchips)
+
+        total = len(chips_list)
+        for i, chip in enumerate(chips_list):
             cleaned = str(chip).strip().split('.')[0]
             if not cleaned or cleaned == "nan" or cleaned == "":
-                results.append("N/A")
+                res = "N/A"
             else:
                 status_text.text(f"🔍 Nº {i+1}/{total}: {cleaned}")
-                res = await check_siac_single(context, cleaned)
-                results.append(res)
+                res = await check_siac_on_page(page, cleaned)
             
+            results.append(res)
             progress_bar.progress((i + 1) / total)
+            
+            # Incremental update via callback
+            if callback is not None and (i + 1) % batch_size == 0:
+                await callback(results)
+            
+        if callback is not None: # Final callback for remaining
+            await callback(results)
             
         await browser.close()
     return results
@@ -152,66 +167,73 @@ with tab_gsheet:
                     femeas = st.session_state.temp_femeas
                     crias = st.session_state.temp_crias
                     url = st.session_state.gs_url
-                    
-                    # Interleaved logic
-                    interleaved = []
                     rows = max(len(femeas), len(crias))
+                    
+                    # Interleaved list for processing
+                    interleaved = []
                     for i in range(rows):
                         if i < len(femeas): interleaved.append(femeas[i])
                         if i < len(crias): interleaved.append(crias[i])
                     
-                    with st.spinner("A trabalhar..."):
-                        raw_results = asyncio.run(process_list(interleaved))
-                    
-                    # De-interleave
-                    siac_f, siac_c = [], []
-                    ptr = 0
-                    for i in range(rows):
-                        if i < len(femeas):
-                            siac_f.append(raw_results[ptr])
-                            ptr += 1
-                        else: siac_f.append("N/A")
-                        
-                        if i < len(crias):
-                            siac_c.append(raw_results[ptr])
-                            ptr += 1
-                        else: siac_c.append("N/A")
-                    
-                    # Alerts Logic (Duplicates in Cria)
-                    c_counts = {}
-                    for i, v in enumerate(crias):
-                        c = str(v).strip().split('.')[0]
-                        if c and c != "nan":
-                            if c in c_counts: c_counts[c].append(i+2)
-                            else: c_counts[c] = [i+2]
-                    
-                    final_f, final_c = [], []
-                    for i in range(rows):
-                        f_chip = str(femeas[i]).strip().split('.')[0] if i < len(femeas) else ""
-                        c_chip = str(crias[i]).strip().split('.')[0] if i < len(crias) else ""
-                        res_f, res_c = siac_f[i], siac_c[i]
-                        
-                        if f_chip != "" and f_chip == c_chip:
-                            res_f = f"⚠️ Cria e Fêmea = | {res_f}"
-                            res_c = f"⚠️ Cria e Fêmea = | {res_c}"
-                        
-                        if c_chip != "" and c_chip in c_counts and len(c_counts[c_chip]) > 1:
-                            others = [str(r) for r in c_counts[c_chip] if r != i + 2]
-                            res_c = f"⚠️ Repetido com a linha nº{', '.join(others)} | {res_c}"
-                        
-                        final_f.append([res_f])
-                        final_c.append([res_c])
+                    async def main_validation():
+                        # Prepare counts for duplicate alert (Cria only)
+                        c_counts = {}
+                        for i, v in enumerate(crias):
+                            c = str(v).strip().split('.')[0]
+                            if c and c != "nan":
+                                if c in c_counts: c_counts[c].append(i+2)
+                                else: c_counts[c] = [i+2]
 
-                    gc = get_gspread_client()
-                    if gc:
-                        sh = gc.open_by_url(url)
-                        ws = sh.get_worksheet(0)
-                        if final_f: ws.update(range_name=f"H2:H{1+len(final_f)}", values=final_f)
-                        if final_c: ws.update(range_name=f"I2:I{1+len(final_c)}", values=final_c)
-                        st.success("✅ Folha atualizada!")
-                        st.balloons()
+                        async def update_sheet_callback(current_results: List[str]) -> None:
+                            """Callback to update the sheet incrementally."""
+                            siac_f, siac_c = [], []
+                            ptr = 0
+                            for i in range(rows):
+                                # Femea
+                                if i < len(femeas):
+                                    res = current_results[ptr] if ptr < len(current_results) else "..."
+                                    f_chip = str(femeas[i]).strip().split('.')[0]
+                                    c_chip = str(crias[i]).strip().split('.')[0] if i < len(crias) else ""
+                                    # Alerts
+                                    if f_chip != "" and f_chip == c_chip: res = f"⚠️ Cria e Fêmea = | {res}"
+                                    siac_f.append([res])
+                                    ptr += 1
+                                else: siac_f.append(["N/A"])
+                                
+                                # Cria
+                                if i < len(crias):
+                                    res = current_results[ptr] if ptr < len(current_results) else "..."
+                                    c_chip = str(crias[i]).strip().split('.')[0]
+                                    f_chip = str(femeas[i]).strip().split('.')[0] if i < len(femeas) else ""
+                                    # Alerts
+                                    if c_chip != "" and f_chip == c_chip: res = f"⚠️ Cria e Fêmea = | {res}"
+                                    if c_chip != "" and c_chip in c_counts and len(c_counts[c_chip]) > 1:
+                                        others = [str(r) for r in c_counts[c_chip] if r != i + 2]
+                                        res = f"⚠️ Repetido com a linha nº{', '.join(others)} | {res}"
+                                    siac_c.append([res])
+                                    ptr += 1
+                                else: siac_c.append(["N/A"])
+                            
+                            # Write to sheet
+                            gc_internal = get_gspread_client()
+                            if gc_internal:
+                                try:
+                                    sh_internal = gc_internal.open_by_url(url)
+                                    ws_internal = sh_internal.get_worksheet(0)
+                                    if siac_f: ws_internal.update(range_name=f"H2:H{1+len(siac_f)}", values=siac_f)
+                                    if siac_c: ws_internal.update(range_name=f"I2:I{1+len(siac_c)}", values=siac_c)
+                                except Exception as e_sheet:
+                                    print(f"Erro ao atualizar folha (batch): {e_sheet}")
+
+                        await process_list_incremental(interleaved, callback=update_sheet_callback, batch_size=20)
+
+                    with st.spinner("A validar e a atualizar a folha em tempo real..."):
+                        asyncio.run(main_validation())
+                    
+                    st.success("✅ Folha totalmente atualizada!")
+                    st.balloons()
                 except Exception as e:
-                    st.error(f"Erro ao gravar: {e}")
+                    st.error(f"Erro ao processar: {e}")
 
 with tab_file:
     uploaded = st.file_uploader("Upload Excel/CSV", type=["xlsx", "csv"])
@@ -226,8 +248,8 @@ with tab_file:
             full_list = []
             for f, c in zip(f_list, c_list): full_list.extend([f, c])
             
-            with st.spinner("Processando..."):
-                raw = asyncio.run(process_list(full_list))
+            with st.spinner("A Processar..."):
+                raw = asyncio.run(process_list_incremental(full_list))
             
             # Alerts Logic (Duplicates in Cria)
             c_counts = {}
@@ -266,7 +288,7 @@ with tab_file:
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
                 df.to_excel(writer, index=False)
-            st.download_button("📥 Baixar Excel", buffer.getvalue(), "siac_results.xlsx")
+            st.download_button("📥 Download do Excel", buffer.getvalue(), "siac_results.xlsx")
 
 st.divider()
 st.caption("Auto SIAC 2026")
