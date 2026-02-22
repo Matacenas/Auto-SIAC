@@ -73,35 +73,36 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
             return "⚠️ Erro"
     return "⚠️ Erro"
 
-async def check_olx_km(page, ad_id: str, retries: int = 1) -> str:
-    """Validates car mileage on OLX."""
+async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
+    """Validates car mileage on OLX with refined extraction."""
     ad_url = f"{OLX_BASE_URL}{ad_id}"
     for attempt in range(retries + 1):
         try:
             await page.goto(ad_url, timeout=45000, wait_until="domcontentloaded")
-            await asyncio.sleep(3)
+            await asyncio.sleep(4)
             
             km_val = await page.evaluate("""
                 () => {
-                    const items = Array.from(document.querySelectorAll('li, div, p, span'));
-                    // Look for the element that has 'Quilómetros' as its label or direct text
-                    const km_element = items.find(el => el.innerText && el.innerText.trim() === 'Quilómetros' || el.innerText.includes('Quilómetros:'));
-                    if (km_element) {
-                        const text = km_element.innerText;
-                        if (text.includes(':')) return text.split(':')[1].trim();
-                        
-                        // Try siblings or parent-child relationship
-                        const parent = km_element.closest('li') || km_element.parentElement;
-                        if (parent) {
-                            const valText = parent.innerText;
-                            const match = valText.match(/(\d[\d\s\.,]*)\s*km/i);
-                            if (match) return match[0].trim();
+                    const details = Array.from(document.querySelectorAll('li, div, p, span'));
+                    for (const el of details) {
+                        const text = el.innerText ? el.innerText.trim() : "";
+                        if (text === 'Quilómetros') {
+                            const parent = el.closest('li') || el.parentElement;
+                            if (parent) {
+                                const fullText = parent.innerText;
+                                const match = fullText.match(/(\d[\d\s\.,]*)\s*km/i);
+                                if (match) return match[1].trim() + " km";
+                            }
                         }
                     }
-                    // Fallback search for any "xxx km"
-                    const allText = document.body.innerText;
-                    const kmMatch = allText.match(/(\d[\d\s\.,]*)\s*km/i);
-                    return kmMatch ? kmMatch[0].trim() : null;
+                    // Fallback to searching any element with "km" that isn't just metadata labels
+                    const km_candidates = Array.from(document.querySelectorAll('li span, .ad-details span, div[data-testid="ad-details-parameter-list"] span'));
+                    for (const cand of km_candidates) {
+                        const content = cand.innerText;
+                        const m = content.match(/^(\d[\d\s\.,]*)\s*km$/i);
+                        if (m) return m[0].trim();
+                    }
+                    return null;
                 }
             """)
             if km_val: return km_val
@@ -116,46 +117,27 @@ async def check_olx_km(page, ad_id: str, retries: int = 1) -> str:
             return "⚠️ Erro Conexão"
     return "⚠️ Erro"
 
-async def check_rnt_location(page, reg_id: str, rnt_type: str = "AL", retries: int = 1) -> str:
-    """Searches RNT for registration location."""
-    search_url = RNT_AL_URL if rnt_type == "AL" else RNT_ET_URL
-    for attempt in range(retries + 1):
-        try:
-            await page.goto(search_url, timeout=60000, wait_until="networkidle")
-            await page.evaluate(f"""
-                (reg) => {{
-                    const inputs = Array.from(document.querySelectorAll('input[type="text"]'));
-                    const target = inputs.find(i => i.id.includes('NumRegisto') || i.name.includes('NumRegisto')) || inputs[0];
-                    if (target) target.value = reg;
-                }}
-            """, reg_id)
-            await page.evaluate("""
-                () => {
-                    const btns = Array.from(document.querySelectorAll('input[type="submit"], button'));
-                    const sBtn = btns.find(b => b.value.includes('Pesquisar') || b.id.includes('btnPesquisar')) || btns[0];
-                    if (sBtn) sBtn.click();
-                }
-            """)
-            await asyncio.sleep(5)
-            
-            loc = await page.evaluate("""
-                () => {
-                    const row = document.querySelector('tr.GridRow, tr.GridAlternatingRow, .GridView tr:nth-child(2)');
-                    if (row) {
-                        const cells = Array.from(row.querySelectorAll('td'));
-                        return cells[cells.length - 1].innerText.trim(); // Usually the last column is the location/address info
-                    }
-                    return null;
-                }
-            """)
-            if loc: return loc
-            if "não foram encontrados" in (await page.content()).lower(): return "❌ Não Encontrado"
-            if attempt < retries: await asyncio.sleep(2); continue
-            return "❓ Sem Dados"
-        except:
-            if attempt < retries: await asyncio.sleep(2); continue
-            return "⚠️ Erro"
-    return "⚠️ Erro"
+async def check_rnt_dual(page, reg_id: str, retries: int = 1) -> List[str]:
+    """Validates registration in BOTH RNAL and RNET."""
+    final_res = []
+    
+    for url, label in [(RNT_AL_URL, "RNAL"), (RNT_ET_URL, "RNET")]:
+        res = "❓ Sem Dados"
+        for attempt in range(retries + 1):
+            try:
+                await page.goto(url, timeout=45000, wait_until="networkidle")
+                await page.evaluate(f"() => {{ const i = Array.from(document.querySelectorAll('input[type=\"text\"]')).find(x => x.id.includes('NumRegisto') || x.name.includes('NumRegisto') || x.id.includes('txtNRegisto')); if (i) i.value = '{reg_id}'; }}")
+                await page.evaluate("() => { const b = Array.from(document.querySelectorAll('input[type=\"submit\"], button')).find(x => x.value.includes('Pesquisar') || x.id.includes('btnPesquisar')); if (b) b.click(); }")
+                await asyncio.sleep(5)
+                loc = await page.evaluate("() => { const r = document.querySelector('tr.GridRow, tr.GridAlternatingRow, .GridView tr:nth-child(2)'); if (r) { const c = Array.from(r.querySelectorAll('td')); return c[c.length - 1].innerText.trim(); } return null; }")
+                if loc: res = loc; break
+                if "não foram encontrados" in (await page.content()).lower(): res = "❌ Não Encontrado"; break
+                if attempt < retries: await asyncio.sleep(2)
+            except: 
+                if attempt < retries: await asyncio.sleep(2)
+                else: res = f"⚠️ Erro {label}"
+        final_res.append(res)
+    return final_res
 
 # --- CORE ENGINE ---
 
@@ -163,13 +145,13 @@ async def process_list_incremental(
     items: List[str], 
     checker_func: Callable, 
     init_url: Optional[str] = None,
-    existing_results: Optional[List[str]] = None, 
-    callback: Optional[Callable[[List[str]], Awaitable[None]]] = None, 
+    existing_results: Optional[List[Any]] = None, 
+    callback: Optional[Callable[[List[Any]], Awaitable[None]]] = None, 
     batch_size: int = 10, 
     refresh_every: int = 50,
     **extra_params
-) -> List[str]:
-    results: List[str] = list(existing_results) if existing_results else ["..."] * len(items)
+) -> List[Any]:
+    results: List[Any] = list(existing_results) if existing_results else ["..."] * len(items)
     progress_bar = st.progress(0)
     status_text = st.empty()
     
@@ -178,8 +160,7 @@ async def process_list_incremental(
         async def init_browser():
             nonlocal browser, context, page
             if browser: await browser.close()
-            try:
-                browser = await p.chromium.launch(headless=True)
+            try: browser = await p.chromium.launch(headless=True)
             except:
                 os.system("playwright install chromium")
                 browser = await p.chromium.launch(headless=True)
@@ -190,7 +171,7 @@ async def process_list_incremental(
         await init_browser()
         total = len(items)
         for i, val in enumerate(items):
-            if i < len(results) and results[i] != "..." and not results[i].startswith("⚠️") and not results[i].startswith("❓"):
+            if i < len(results) and results[i] != "..." and results[i] != ["...", "..."] and not (isinstance(results[i], str) and results[i].startswith("⚠️")):
                 progress_bar.progress((i + 1) / total)
                 continue
             if i > 0 and i % refresh_every == 0:
@@ -213,17 +194,90 @@ async def process_list_incremental(
 
 # --- UI LOGIC ---
 
-st.title("🚀 Validação Automática no OLX")
-st.markdown("Plataforma integrada para validação de dados SIAC, OLX e RNT.")
+st.title("🚀 Validação Automática")
+st.markdown("Plataforma integrada para validação de dados SIAC, AL e OLX.")
 
-tab_olx, tab_siac, tab_rnt = st.tabs(["🚗 OLX (Carros)", "🐾 SIAC (Cães/Gatos)", "🏠 RNT (AL e ET)"])
+tab_siac, tab_rnt, tab_olx = st.tabs(["🐾 SIAC (Cães/Gatos)", "🏠 AL (RNAL e RNET)", "🚗 OLX (Carros)"])
+
+# --- TAB: SIAC ---
+with tab_siac:
+    st.subheader("Validação SIAC")
+    url_siac = st.text_input("URL Google Sheet (SIAC)", key="url_siac")
+    if st.button("🚀 Iniciar Validação SIAC"):
+        if not url_siac: st.warning("Insira o URL.")
+        else:
+            gc = get_gspread_client()
+            if gc:
+                try:
+                    sh = gc.open_by_url(url_siac)
+                    ws = sh.get_worksheet(0)
+                    femeas = ws.col_values(7)[1:] # G
+                    crias = ws.col_values(8)[1:]  # H
+                    rows = max(len(femeas), len(crias))
+                    interleaved = []
+                    for i in range(rows):
+                        if i < len(femeas): interleaved.append(femeas[i])
+                        if i < len(crias): interleaved.append(crias[i])
+                    
+                    async def update_siac_gs(res):
+                        ptr, sf, sc = 0, [], []
+                        for i in range(rows):
+                            if i < len(femeas): sf.append([res[ptr]]); ptr += 1
+                            else: sf.append(["N/A"])
+                            if i < len(crias): sc.append([res[ptr]]); ptr += 1
+                            else: sc.append(["N/A"])
+                        gc_i = get_gspread_client()
+                        if gc_i:
+                            sh_i = gc_i.open_by_url(url_siac)
+                            ws_i = sh_i.get_worksheet(0)
+                            ws_i.update(range_name=f"I2:I{1+len(sf)}", values=sf)
+                            ws_i.update(range_name=f"J2:J{1+len(sc)}", values=sc)
+
+                    with st.spinner("Validando SIAC..."):
+                        asyncio.run(process_list_incremental(interleaved, check_siac_on_page, init_url=SIAC_URL, callback=update_siac_gs))
+                    st.success("Concluído!")
+                except Exception as e: st.error(f"Erro: {e}")
+
+# --- TAB: RNT ---
+with tab_rnt:
+    st.subheader("Validação RNAL e RNET")
+    st.info("💡 Valida o ID na coluna E e devolve resultados na F (RNAL) e G (RNET).")
+    url_rnt = st.text_input("URL Google Sheet (RNT)", key="url_rnt")
+    
+    if st.button("🚀 Iniciar Validação AL/ET"):
+        if not url_rnt: st.warning("Insira o URL.")
+        else:
+            gc = get_gspread_client()
+            if gc:
+                try:
+                    sh = gc.open_by_url(url_rnt)
+                    ws = sh.get_worksheet(0)
+                    regs = ws.col_values(5)[1:] # Column E
+                    
+                    async def update_rnt_gs(res):
+                        gc_u = get_gspread_client()
+                        if gc_u:
+                            sh_u = gc_u.open_by_url(url_rnt)
+                            ws_u = sh_u.get_worksheet(0)
+                            col_f, col_g = [], []
+                            for r in res:
+                                if isinstance(r, list) and len(r) == 2:
+                                    col_f.append([r[0]]); col_g.append([r[1]])
+                                else:
+                                    col_f.append(["..."]); col_g.append(["..."])
+                            if col_f: ws_u.update(range_name=f"F2:F{1+len(col_f)}", values=col_f)
+                            if col_g: ws_u.update(range_name=f"G2:G{1+len(col_g)}", values=col_g)
+                    
+                    with st.spinner("Validando RNAL e RNET..."):
+                        asyncio.run(process_list_incremental(regs, check_rnt_dual, callback=update_rnt_gs))
+                    st.success("Concluído!")
+                    st.balloons()
+                except Exception as e: st.error(f"Erro: {e}")
 
 # --- TAB: OLX ---
 with tab_olx:
     st.subheader("Validação de Km no OLX")
-    st.info("💡 Forneça coluna com IDs de anúncios (ex: 668784298) e valide os Km live.")
     url_olx = st.text_input("URL Google Sheet (OLX)", key="url_olx")
-    
     col1, col2 = st.columns(2)
     if col1.button("🔍 Ler IDs", key="btn_read_olx"):
         gc = get_gspread_client()
@@ -231,9 +285,9 @@ with tab_olx:
             try:
                 sh = gc.open_by_url(url_olx)
                 ws = sh.get_worksheet(0)
-                ids = ws.col_values(1)[1:] # Assume ID in Column A
+                ids = ws.col_values(1)[1:] # Column A
                 st.session_state.olx_ids = ids
-                st.success(f"Encontrados {len(ids)} IDs.")
+                st.success(f"Encontrados {len(ids)} IDs na coluna A.")
                 st.table(pd.DataFrame({"IDs": ids}).head(5))
             except Exception as e: st.error(f"Erro: {e}")
 
@@ -246,76 +300,13 @@ with tab_olx:
                     sh_u = gc_u.open_by_url(url_olx)
                     ws_u = sh_u.get_worksheet(0)
                     formatted = [[r] for r in results]
-                    ws_u.update(range_name=f"B2:B{1+len(formatted)}", values=formatted) # Results in Col B
+                    ws_u.update(range_name=f"B2:B{1+len(formatted)}", values=formatted) # Column B
             
             with st.spinner("Validando anúncios OLX..."):
                 asyncio.run(process_list_incremental(ids, check_olx_km, callback=update_olx, batch_size=10))
             st.success("Concluído!")
             st.balloons()
         else: st.warning("Leia os dados primeiro.")
-
-# --- TAB: SIAC ---
-with tab_siac:
-    st.subheader("Validação SIAC (Original)")
-    url_siac = st.text_input("URL Google Sheet (SIAC)", key="url_siac")
-    # ... logic here (simplified for space or kept as original)
-    # I'll keep the core SIAC logic from the original but adapted to the new engine
-    if st.button("🚀 Iniciar Validação SIAC"):
-        gc = get_gspread_client()
-        if gc:
-            sh = gc.open_by_url(url_siac)
-            ws = sh.get_worksheet(0)
-            femeas = ws.col_values(7)[1:] # G
-            crias = ws.col_values(8)[1:]  # H
-            rows = max(len(femeas), len(crias))
-            interleaved = []
-            for i in range(rows):
-                if i < len(femeas): interleaved.append(femeas[i])
-                if i < len(crias): interleaved.append(crias[i])
-            
-            async def update_siac_gs(res):
-                ptr, sf, sc = 0, [], []
-                for i in range(rows):
-                    if i < len(femeas): sf.append([res[ptr]]); ptr += 1
-                    else: sf.append(["N/A"])
-                    if i < len(crias): sc.append([res[ptr]]); ptr += 1
-                    else: sc.append(["N/A"])
-                gc_i = get_gspread_client()
-                if gc_i:
-                    sh_i = gc_i.open_by_url(url_siac)
-                    ws_i = sh_i.get_worksheet(0)
-                    ws_i.update(range_name=f"I2:I{1+len(sf)}", values=sf)
-                    ws_i.update(range_name=f"J2:J{1+len(sc)}", values=sc)
-
-            with st.spinner("Validando SIAC..."):
-                asyncio.run(process_list_incremental(interleaved, check_siac_on_page, init_url=SIAC_URL, callback=update_siac_gs))
-            st.success("Concluído!")
-
-# --- TAB: RNT ---
-with tab_rnt:
-    st.subheader("Validação RNT (Turismo)")
-    rnt_mode = st.radio("Tipo", ["AL (Alojamento Local)", "ET (Empreendimento Turístico)"])
-    url_rnt = st.text_input("URL Google Sheet (RNT)", key="url_rnt")
-    
-    if st.button("🚀 Validar Localizações"):
-        gc = get_gspread_client()
-        if gc:
-            sh = gc.open_by_url(url_rnt)
-            ws = sh.get_worksheet(0)
-            regs = ws.col_values(5)[1:] # Column E
-            
-            async def update_rnt(res):
-                gc_u = get_gspread_client()
-                if gc_u:
-                    sh_u = gc_u.open_by_url(url_rnt)
-                    ws_u = sh_u.get_worksheet(0)
-                    formatted = [[r] for r in res]
-                    ws_u.update(range_name=f"F2:F{1+len(formatted)}", values=formatted) # Column F
-            
-            with st.spinner(f"Validando {rnt_mode}..."):
-                mode_code = "AL" if "AL" in rnt_mode else "ET"
-                asyncio.run(process_list_incremental(regs, check_rnt_location, callback=update_rnt, rnt_type=mode_code))
-            st.success("Concluído!")
 
 st.divider()
 st.caption("Validação Automática Multi-Project 2026")
