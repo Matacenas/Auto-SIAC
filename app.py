@@ -10,7 +10,7 @@ from typing import List, Optional, Callable, Awaitable, Any
 # --- CONFIGURATION ---
 SIAC_URL = "https://www.siac.pt/pt"
 OLX_BASE_URL = "https://www.olx.pt/"
-RNT_AL_URL = "https://rnt.turismodeportugal.pt/RNT/Pesquisa_AL.aspx"
+RNT_AL_DIRECT_URL = "https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr="
 RNT_ET_URL = "https://rnt.turismodeportugal.pt/RNT/Pesquisa_ET.aspx"
 
 SIAC_TEXT_REGISTERED = "Animal com registo no SIAC"
@@ -74,35 +74,51 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
     return "⚠️ Erro"
 
 async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
-    """Validates car mileage on OLX with refined extraction."""
-    ad_url = f"{OLX_BASE_URL}{ad_id}"
+    """Validates car mileage on OLX with very robust text-based searching."""
+    if str(ad_id).isdigit():
+        ad_url = f"{OLX_BASE_URL}{ad_id}"
+    else:
+        ad_url = ad_id if str(ad_id).startswith('http') else f"{OLX_BASE_URL}d/anuncio/{ad_id}.html"
+
     for attempt in range(retries + 1):
         try:
             await page.goto(ad_url, timeout=45000, wait_until="domcontentloaded")
-            await asyncio.sleep(4)
+            await asyncio.sleep(5) 
             
             km_val = await page.evaluate("""
                 () => {
-                    const details = Array.from(document.querySelectorAll('li, div, p, span'));
-                    for (const el of details) {
-                        const text = el.innerText ? el.innerText.trim() : "";
-                        if (text === 'Quilómetros') {
-                            const parent = el.closest('li') || el.parentElement;
-                            if (parent) {
-                                const fullText = parent.innerText;
-                                const match = fullText.match(/(\d[\d\s\.,]*)\s*km/i);
-                                if (match) return match[1].trim() + " km";
+                    const findInText = (text) => {
+                        const m = text.match(/(\\d[\\d\\s\\.,]*)\\s*km/i);
+                        return m ? m[0].trim() : null;
+                    };
+
+                    const specItems = Array.from(document.querySelectorAll('li, div[data-testid="ad_properties_item"], .ad-properties__item'));
+                    for (const item of specItems) {
+                        const t = item.innerText || "";
+                        if (t.includes('Quilómetros')) {
+                            const val = findInText(t);
+                            if (val) return val;
+                            const children = Array.from(item.querySelectorAll('span, p, div'));
+                            for (const c of children) {
+                                const v = findInText(c.innerText);
+                                if (v) return v;
                             }
                         }
                     }
-                    // Fallback to searching any element with "km" that isn't just metadata labels
-                    const km_candidates = Array.from(document.querySelectorAll('li span, .ad-details span, div[data-testid="ad-details-parameter-list"] span'));
-                    for (const cand of km_candidates) {
-                        const content = cand.innerText;
-                        const m = content.match(/^(\d[\d\s\.,]*)\s*km$/i);
-                        if (m) return m[0].trim();
+
+                    const bodyText = document.body.innerText;
+                    const lines = bodyText.split('\\n');
+                    for (let i = 0; i < lines.length; i++) {
+                        if (lines[i].includes('Quilómetros')) {
+                            for (let j = i; j <= i + 3 && j < lines.length; j++) {
+                                const val = findInText(lines[j]);
+                                if (val) return val;
+                            }
+                        }
                     }
-                    return null;
+
+                    const genericMatch = bodyText.match(/(\\d[\\d\\s\\.,]*)\\s*km/i);
+                    return genericMatch ? genericMatch[0].trim() : null;
                 }
             """)
             if km_val: return km_val
@@ -117,26 +133,64 @@ async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
             return "⚠️ Erro Conexão"
     return "⚠️ Erro"
 
-async def check_rnt_dual(page, reg_id: str, retries: int = 1) -> List[str]:
-    """Validates registration in BOTH RNAL and RNET."""
-    final_res = []
+async def check_rnt_dual_detailed(page, reg_id: str, retries: int = 1) -> List[str]:
+    """Validates registration in BOTH RNAL (Direct detail) and RNET."""
+    final_res = ["❓ Sem Dados", "❓ Sem Dados", "❓ Sem Dados"]
     
-    for url, label in [(RNT_AL_URL, "RNAL"), (RNT_ET_URL, "RNET")]:
-        res = "❓ Sem Dados"
-        for attempt in range(retries + 1):
-            try:
-                await page.goto(url, timeout=45000, wait_until="networkidle")
-                await page.evaluate(f"() => {{ const i = Array.from(document.querySelectorAll('input[type=\"text\"]')).find(x => x.id.includes('NumRegisto') || x.name.includes('NumRegisto') || x.id.includes('txtNRegisto')); if (i) i.value = '{reg_id}'; }}")
-                await page.evaluate("() => { const b = Array.from(document.querySelectorAll('input[type=\"submit\"], button')).find(x => x.value.includes('Pesquisar') || x.id.includes('btnPesquisar')); if (b) b.click(); }")
-                await asyncio.sleep(5)
-                loc = await page.evaluate("() => { const r = document.querySelector('tr.GridRow, tr.GridAlternatingRow, .GridView tr:nth-child(2)'); if (r) { const c = Array.from(r.querySelectorAll('td')); return c[c.length - 1].innerText.trim(); } return null; }")
-                if loc: res = loc; break
-                if "não foram encontrados" in (await page.content()).lower(): res = "❌ Não Encontrado"; break
-                if attempt < retries: await asyncio.sleep(2)
-            except: 
-                if attempt < retries: await asyncio.sleep(2)
-                else: res = f"⚠️ Erro {label}"
-        final_res.append(res)
+    # --- RNAL Direct ---
+    rnal_url = f"{RNT_AL_DIRECT_URL}{reg_id}"
+    for attempt in range(retries + 1):
+        try:
+            await page.goto(rnal_url, timeout=45000, wait_until="networkidle")
+            await asyncio.sleep(2)
+            details = await page.evaluate("""
+                () => {
+                    const getText = (label) => {
+                        const all = Array.from(document.querySelectorAll('span, label, td, b'));
+                        const target = all.find(l => l.innerText && l.innerText.trim().startsWith(label));
+                        if (target) {
+                            const parent = target.parentElement;
+                            if (parent) {
+                                const text = parent.innerText.replace(label, '').trim();
+                                if (text.length > 1) return text;
+                            }
+                            const next = target.nextElementSibling;
+                            if (next) return next.innerText.trim();
+                        }
+                        return null;
+                    };
+                    const address = getText('Morada:') || getText('Localização:') || getText('Morada');
+                    const concelho = getText('Concelho:') || getText('Concelho');
+                    const freguesia = getText('Freguesia:') || getText('Freguesia');
+                    if (address) return { address: address + (freguesia ? ' - ' + freguesia : ''), concelho: concelho || "N/A" };
+                    return null;
+                }
+            """)
+            if details:
+                final_res[0], final_res[1] = details['address'], details['concelho']
+                break
+            if "não foram encontrados" in (await page.content()).lower():
+                final_res[0], final_res[1] = "❌ Não Encontrado", "❌ Não Encontrado"
+                break
+            if attempt < retries: await asyncio.sleep(2)
+        except: 
+            if attempt < retries: await asyncio.sleep(2)
+            else: final_res[0] = "⚠️ Erro RNAL"
+
+    # --- RNET Search ---
+    for attempt in range(retries + 1):
+        try:
+            await page.goto(RNT_ET_URL, timeout=45000, wait_until="networkidle")
+            await page.evaluate(f"() => {{ const i = Array.from(document.querySelectorAll('input[type=\"text\"]')).find(x => x.id.includes('NumRegisto') || x.name.includes('NumRegisto') || x.id.includes('txtNRegisto')); if (i) i.value = '{reg_id}'; }}")
+            await page.evaluate("() => { const b = Array.from(document.querySelectorAll('input[type=\"submit\"], button')).find(x => x.value.includes('Pesquisar') || x.id.includes('btnPesquisar')); if (b) b.click(); }")
+            await asyncio.sleep(5)
+            loc = await page.evaluate("() => { const r = document.querySelector('tr.GridRow, tr.GridAlternatingRow, .GridView tr:nth-child(2)'); if (r) { const c = Array.from(r.querySelectorAll('td')); return c[c.length - 1].innerText.trim(); } return null; }")
+            if loc: final_res[2] = loc; break
+            if "não foram encontrados" in (await page.content()).lower(): final_res[2] = "❌ Não Encontrado"; break
+            if attempt < retries: await asyncio.sleep(2)
+        except: 
+            if attempt < retries: await asyncio.sleep(2)
+            else: final_res[2] = "⚠️ Erro RNET"
     return final_res
 
 # --- CORE ENGINE ---
@@ -171,7 +225,13 @@ async def process_list_incremental(
         await init_browser()
         total = len(items)
         for i, val in enumerate(items):
-            if i < len(results) and results[i] != "..." and results[i] != ["...", "..."] and not (isinstance(results[i], str) and results[i].startswith("⚠️")):
+            # Complex resume logic for lists (RNT) or strings (SIAC/OLX)
+            should_skip = False
+            if i < len(results) and results[i] != "..." and results[i] != ["...", "...", "..."]:
+                if isinstance(results[i], str) and not results[i].startswith("⚠️"): should_skip = True
+                elif isinstance(results[i], list) and not any(str(r).startswith("⚠️") for r in results[i]): should_skip = True
+            
+            if should_skip:
                 progress_bar.progress((i + 1) / total)
                 continue
             if i > 0 and i % refresh_every == 0:
@@ -240,8 +300,8 @@ with tab_siac:
 
 # --- TAB: RNT ---
 with tab_rnt:
-    st.subheader("Validação RNAL e RNET")
-    st.info("💡 Valida o ID na coluna E e devolve resultados na F (RNAL) e G (RNET).")
+    st.subheader("Validação Detalhada RNAL e RNET")
+    st.info("💡 Valida o ID na coluna E.\n- F: Morada RNAL\n- G: Concelho RNAL\n- H: Localização RNET")
     url_rnt = st.text_input("URL Google Sheet (RNT)", key="url_rnt")
     
     if st.button("🚀 Iniciar Validação AL/ET"):
@@ -259,24 +319,25 @@ with tab_rnt:
                         if gc_u:
                             sh_u = gc_u.open_by_url(url_rnt)
                             ws_u = sh_u.get_worksheet(0)
-                            col_f, col_g = [], []
+                            col_f, col_g, col_h = [], [], []
                             for r in res:
-                                if isinstance(r, list) and len(r) == 2:
-                                    col_f.append([r[0]]); col_g.append([r[1]])
+                                if isinstance(r, list) and len(r) == 3:
+                                    col_f.append([r[0]]); col_g.append([r[1]]); col_h.append([r[2]])
                                 else:
-                                    col_f.append(["..."]); col_g.append(["..."])
+                                    col_f.append(["..."]); col_g.append(["..."]); col_h.append(["..."])
                             if col_f: ws_u.update(range_name=f"F2:F{1+len(col_f)}", values=col_f)
                             if col_g: ws_u.update(range_name=f"G2:G{1+len(col_g)}", values=col_g)
+                            if col_h: ws_u.update(range_name=f"H2:H{1+len(col_h)}", values=col_h)
                     
-                    with st.spinner("Validando RNAL e RNET..."):
-                        asyncio.run(process_list_incremental(regs, check_rnt_dual, callback=update_rnt_gs))
+                    with st.spinner("Validando RNAL e RNET detalhado..."):
+                        asyncio.run(process_list_incremental(regs, check_rnt_dual_detailed, callback=update_rnt_gs))
                     st.success("Concluído!")
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
 
 # --- TAB: OLX ---
 with tab_olx:
-    st.subheader("Validação de Km no OLX")
+    st.subheader("Validação de Km no OLX (Scan)")
     url_olx = st.text_input("URL Google Sheet (OLX)", key="url_olx")
     col1, col2 = st.columns(2)
     if col1.button("🔍 Ler IDs", key="btn_read_olx"):
