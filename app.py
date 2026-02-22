@@ -133,11 +133,9 @@ async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
             return "⚠️ Erro Conexão"
     return "⚠️ Erro"
 
-async def check_rnt_dual_detailed(page, reg_id: str, retries: int = 1) -> List[str]:
-    """Validates registration in BOTH RNAL (Direct detail) and RNET."""
-    final_res = ["❓ Sem Dados", "❓ Sem Dados", "❓ Sem Dados"]
-    
-    # --- RNAL Direct ---
+async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
+    """Validates registration in RNAL (Direct detail) only."""
+    res = "❓ Sem Dados"
     rnal_url = f"{RNT_AL_DIRECT_URL}{reg_id}"
     for attempt in range(retries + 1):
         try:
@@ -162,36 +160,23 @@ async def check_rnt_dual_detailed(page, reg_id: str, retries: int = 1) -> List[s
                     const address = getText('Morada:') || getText('Localização:') || getText('Morada');
                     const concelho = getText('Concelho:') || getText('Concelho');
                     const freguesia = getText('Freguesia:') || getText('Freguesia');
-                    if (address) return { address: address + (freguesia ? ' - ' + freguesia : ''), concelho: concelho || "N/A" };
+                    if (address) {
+                        return address + (freguesia ? ' - ' + freguesia : '') + (concelho ? ' (' + concelho + ')' : '');
+                    }
                     return null;
                 }
             """)
             if details:
-                final_res[0], final_res[1] = details['address'], details['concelho']
+                res = details
                 break
             if "não foram encontrados" in (await page.content()).lower():
-                final_res[0], final_res[1] = "❌ Não Encontrado", "❌ Não Encontrado"
+                res = "❌ Não Encontrado"
                 break
             if attempt < retries: await asyncio.sleep(2)
         except: 
             if attempt < retries: await asyncio.sleep(2)
-            else: final_res[0] = "⚠️ Erro RNAL"
-
-    # --- RNET Search ---
-    for attempt in range(retries + 1):
-        try:
-            await page.goto(RNT_ET_URL, timeout=45000, wait_until="networkidle")
-            await page.evaluate(f"() => {{ const i = Array.from(document.querySelectorAll('input[type=\"text\"]')).find(x => x.id.includes('NumRegisto') || x.name.includes('NumRegisto') || x.id.includes('txtNRegisto')); if (i) i.value = '{reg_id}'; }}")
-            await page.evaluate("() => { const b = Array.from(document.querySelectorAll('input[type=\"submit\"], button')).find(x => x.value.includes('Pesquisar') || x.id.includes('btnPesquisar')); if (b) b.click(); }")
-            await asyncio.sleep(5)
-            loc = await page.evaluate("() => { const r = document.querySelector('tr.GridRow, tr.GridAlternatingRow, .GridView tr:nth-child(2)'); if (r) { const c = Array.from(r.querySelectorAll('td')); return c[c.length - 1].innerText.trim(); } return null; }")
-            if loc: final_res[2] = loc; break
-            if "não foram encontrados" in (await page.content()).lower(): final_res[2] = "❌ Não Encontrado"; break
-            if attempt < retries: await asyncio.sleep(2)
-        except: 
-            if attempt < retries: await asyncio.sleep(2)
-            else: final_res[2] = "⚠️ Erro RNET"
-    return final_res
+            else: res = "⚠️ Erro RNAL"
+    return res
 
 # --- CORE ENGINE ---
 
@@ -225,15 +210,11 @@ async def process_list_incremental(
         await init_browser()
         total = len(items)
         for i, val in enumerate(items):
-            # Complex resume logic for lists (RNT) or strings (SIAC/OLX)
-            should_skip = False
-            if i < len(results) and results[i] != "..." and results[i] != ["...", "...", "..."]:
-                if isinstance(results[i], str) and not results[i].startswith("⚠️"): should_skip = True
-                elif isinstance(results[i], list) and not any(str(r).startswith("⚠️") for r in results[i]): should_skip = True
-            
-            if should_skip:
+            # Complex resume logic for strings (SIAC/OLX/RNT)
+            if i < len(results) and results[i] != "..." and not (isinstance(results[i], str) and results[i].startswith("⚠️")):
                 progress_bar.progress((i + 1) / total)
                 continue
+
             if i > 0 and i % refresh_every == 0:
                 status_text.text(f"♻️ Reiniciando navegador...")
                 await init_browser()
@@ -300,11 +281,11 @@ with tab_siac:
 
 # --- TAB: RNT ---
 with tab_rnt:
-    st.subheader("Validação Detalhada RNAL e RNET")
-    st.info("💡 Valida o ID na coluna E.\n- F: Morada RNAL\n- G: Concelho RNAL\n- H: Localização RNET")
+    st.subheader("Validação RNAL")
+    st.info("💡 Valida o ID na coluna E e devolve Morada/Dados na coluna F.")
     url_rnt = st.text_input("URL Google Sheet (RNT)", key="url_rnt")
     
-    if st.button("🚀 Iniciar Validação AL/ET"):
+    if st.button("🚀 Iniciar Validação RNAL"):
         if not url_rnt: st.warning("Insira o URL.")
         else:
             gc = get_gspread_client()
@@ -319,18 +300,11 @@ with tab_rnt:
                         if gc_u:
                             sh_u = gc_u.open_by_url(url_rnt)
                             ws_u = sh_u.get_worksheet(0)
-                            col_f, col_g, col_h = [], [], []
-                            for r in res:
-                                if isinstance(r, list) and len(r) == 3:
-                                    col_f.append([r[0]]); col_g.append([r[1]]); col_h.append([r[2]])
-                                else:
-                                    col_f.append(["..."]); col_g.append(["..."]); col_h.append(["..."])
-                            if col_f: ws_u.update(range_name=f"F2:F{1+len(col_f)}", values=col_f)
-                            if col_g: ws_u.update(range_name=f"G2:G{1+len(col_g)}", values=col_g)
-                            if col_h: ws_u.update(range_name=f"H2:H{1+len(col_h)}", values=col_h)
+                            formatted = [[r] for r in res]
+                            ws_u.update(range_name=f"F2:F{1+len(formatted)}", values=formatted)
                     
-                    with st.spinner("Validando RNAL e RNET detalhado..."):
-                        asyncio.run(process_list_incremental(regs, check_rnt_dual_detailed, callback=update_rnt_gs))
+                    with st.spinner("Validando RNAL detalhado..."):
+                        asyncio.run(process_list_incremental(regs, check_rnt_rnal_only, callback=update_rnt_gs))
                     st.success("Concluído!")
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
