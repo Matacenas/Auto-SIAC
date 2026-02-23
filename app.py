@@ -198,7 +198,11 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
                     const blacklist = ['MAP DATA', 'CLICK TO TOGGLE', 'METRIC', 'IMPERIAL', 'UNITS', '©', 'LOJA'];
                     
                     const isMetadata = (text) => {
-                        const up = text.toUpperCase();
+                        const t = text.trim();
+                        const up = t.toUpperCase();
+                        // Reject exact matches for distance like "1 km", "5 km"
+                        if (/^\d+[\d\s\.,]*\s*km$/i.test(t)) return true;
+                        // Reject if it's mostly map metadata phrases
                         return blacklist.some(b => up.includes(b));
                     };
 
