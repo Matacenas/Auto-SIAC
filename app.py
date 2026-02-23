@@ -170,8 +170,8 @@ async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
             if km_val: return km_val
             
             content = await page.content()
-            if "não se encontra disponível" in content.lower() or "anúncio removido" in content.lower():
-                return "🚫 Inativo/Vendido"
+            if any(text in content.lower() for text in ["não se encontra disponível", "anúncio removido", "já não está disponível"]):
+                return "⚠️ Anúncio já foi moderado ⚠️"
             if attempt < retries: await asyncio.sleep(2); continue
             return "❓ Km não encontrado"
         except:
@@ -377,7 +377,8 @@ async def process_list_incremental(
                 else: cleaned = raw_str
                 status_display = cleaned
             
-            if not str(val).strip() or str(val).lower() == "nan": res = "N/A"
+            check_val = val[0] if isinstance(val, (tuple, list)) else val
+            if not str(check_val).strip() or str(check_val).lower() == "nan": res = "N/A"
             else:
                 status_text.text(f"🔍 [{i+1}/{total}] A Trabalhar: {status_display}")
                 res = await checker_func(page, cleaned, **extra_params)
@@ -506,10 +507,10 @@ with tab_rnt:
                                 val_formatted = []
                                 for r in results:
                                     olx_l, rnt_l = str(r[0]).lower(), str(r[1]).lower()
-                                    if any(s in str(r[0]) or s in str(r[1]) for s in ["...", "⚠️", "❓"]):
-                                        val_formatted.append(["..."])
-                                    elif rnt_l == "n/a" or not rnt_l:
+                                    if rnt_l == "n/a" or not rnt_l or "sem dados" in rnt_l:
                                         val_formatted.append(["⚠️ Sem resultado - Confirmar no RNET ⚠️"])
+                                    elif any(s in str(r[0]) or s in str(r[1]) for s in ["...", "⚠️", "❓"]):
+                                        val_formatted.append(["..."])
                                     elif olx_l != "n/a" and any(word in rnt_l for word in olx_l.split() if len(word) > 3): 
                                         val_formatted.append(["✅Localização Correcta ✅"])
                                     else: val_formatted.append(["❌ Localização Errada ❌"])
@@ -555,6 +556,10 @@ with tab_olx:
                         st.stop()
                     ids = ws.col_values(1)[1:] # Column A
                     system_km = ws.col_values(3)[1:] # Col C (User provided)
+                    # Pad lists to ensure same length
+                    max_len = max(len(ids), len(system_km))
+                    ids += [""] * (max_len - len(ids))
+                    system_km += [""] * (max_len - len(system_km))
                     
                     async def update_cars_gs(results):
                         # results is a list of (found_km, validation)
@@ -568,13 +573,13 @@ with tab_olx:
                                 ws_u.update(range_name=f"D2:D{1+len(bot_km_fmt)}", values=bot_km_fmt) # Col D
                                 ws_u.update(range_name=f"E2:E{1+len(val_fmt)}", values=val_fmt) # Col E
                     
-                    async def cars_checker(page, idx_val):
-                        idx, ad_id = idx_val
+                    async def cars_checker(page, id_val_tuple):
+                        ad_id, sys_km_raw = id_val_tuple
                         # Get found KM from OLX
                         found_km_str = await check_olx_km(page, ad_id)
                         
-                        # Compare with system_km from Col C
-                        sys_km = str(system_km[idx]).replace(' ', '').replace('.', '').replace(',', '').strip() if idx < len(system_km) else ""
+                        # Compare with sys_km_raw
+                        sys_km = str(sys_km_raw).replace(' ', '').replace('.', '').replace(',', '').strip()
                         found_km_clean = found_km_str.replace('km', '').replace(' ', '').replace('.', '').replace(',', '').strip().lower()
                         
                         validation = "..."
@@ -585,8 +590,9 @@ with tab_olx:
                         return (found_km_str, validation)
 
                     with st.spinner("Validando anúncios OLX..."):
-                        # We pass index to cars_checker to access system_km
-                        asyncio.run(process_list_incremental(list(enumerate(ids)), cars_checker, callback=update_cars_gs, batch_size=10))
+                        # Pass zipped list to show Ad ID in status
+                        combined = list(zip(ids, system_km))
+                        asyncio.run(process_list_incremental(combined, cars_checker, callback=update_cars_gs, batch_size=10))
                     st.success("Concluído!")
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
