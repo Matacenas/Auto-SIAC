@@ -10,7 +10,7 @@ from typing import List, Optional, Callable, Awaitable, Any
 
 # --- CONFIGURATION ---
 LINKS_FILE = "links.json"
-GLOBAL_DEFAULT_URL = "https://docs.google.com/spreadsheets/d/1tBByX3lY9WbEos-Y3w571YyO_724fMscT86f1e82E50" # Pre-filled as requested
+GLOBAL_DEFAULT_URL = "https://docs.google.com/spreadsheets/d/17sq7E56TExN8Icw9Du2oUiuzhLDzfb4VmTgFmJGS1Do" # Corrected URL
 
 def load_links():
     if os.path.exists(LINKS_FILE):
@@ -330,14 +330,19 @@ async def process_list_incremental(
                 status_text.text(f"♻️ Reiniciando navegador...")
                 await init_browser()
 
-            # Improved Cleaning: Only auto-split if it looks like a numeric float from Excel (e.g. 123.0)
-            raw_str = str(val).strip()
-            if raw_str.endswith(".0"): cleaned = raw_str[:-2]
-            else: cleaned = raw_str
-            
-            if not cleaned or cleaned.lower() == "nan" or cleaned == "": res = "N/A"
+            # Improved Cleaning: Handle tuples/lists vs single values
+            if isinstance(val, (tuple, list)):
+                cleaned = val # Preserve for complex checkers
+                status_display = str(val[0])
             else:
-                status_text.text(f"🔍 [{i+1}/{total}] Processando: {cleaned}")
+                raw_str = str(val).strip()
+                if raw_str.endswith(".0"): cleaned = raw_str[:-2]
+                else: cleaned = raw_str
+                status_display = cleaned
+            
+            if not str(val).strip() or str(val).lower() == "nan": res = "N/A"
+            else:
+                status_text.text(f"🔍 [{i+1}/{total}] Processando: {status_display}")
                 res = await checker_func(page, cleaned, **extra_params)
             
             results[i] = res
