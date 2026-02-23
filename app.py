@@ -508,9 +508,11 @@ with tab_rnt:
                                     olx_l, rnt_l = str(r[0]).lower(), str(r[1]).lower()
                                     if any(s in str(r[0]) or s in str(r[1]) for s in ["...", "⚠️", "❓"]):
                                         val_formatted.append(["..."])
-                                    elif olx_l != "n/a" and rnt_l != "n/a" and any(word in rnt_l for word in olx_l.split() if len(word) > 3): 
-                                        val_formatted.append(["✅"])
-                                    else: val_formatted.append(["❌"])
+                                    elif rnt_l == "n/a" or not rnt_l:
+                                        val_formatted.append(["⚠️ Sem resultado - Confirmar no RNET ⚠️"])
+                                    elif olx_l != "n/a" and any(word in rnt_l for word in olx_l.split() if len(word) > 3): 
+                                        val_formatted.append(["✅Localização Correcta ✅"])
+                                    else: val_formatted.append(["❌ Localização Errada ❌"])
                                     
                                 ws_u.update(range_name=f"C2:C{1+len(olx_formatted)}", values=olx_formatted) # OLX Loc
                                 ws_u.update(range_name=f"E2:E{1+len(rnal_formatted)}", values=rnal_formatted) # RNAL Data
