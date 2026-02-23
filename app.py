@@ -10,6 +10,7 @@ from typing import List, Optional, Callable, Awaitable, Any
 
 # --- CONFIGURATION ---
 LINKS_FILE = "links.json"
+GLOBAL_DEFAULT_URL = "https://docs.google.com/spreadsheets/d/1tBByX3lY9WbEos-Y3w571YyO_724fMscT86f1e82E50" # Pre-filled as requested
 
 def load_links():
     if os.path.exists(LINKS_FILE):
@@ -56,11 +57,32 @@ def get_gspread_client():
         return None
 
 def get_worksheet_by_name(sh, target_name):
-    """Try to find worksheet by name, fallback to first worksheet."""
+    """Try to find worksheet by name (case-insensitive). Return None if not found."""
     try:
-        return sh.worksheet(target_name)
-    except:
-        return sh.get_worksheet(0)
+        titles = [ws.title for ws in sh.worksheets()]
+        best_match = next((t for t in titles if t.strip().lower() == target_name.strip().lower()), None)
+        if best_match:
+            return sh.worksheet(best_match)
+        return None
+    except Exception as e:
+        print(f"Erro ao procurar aba: {e}")
+        return None
+
+def batch_clear_rows(ws, rows, condition_func):
+    """Efficiently clear rows matching a condition by filtering and overwriting."""
+    if not rows: return 0
+    header = rows[0]
+    new_rows = [header]
+    deleted_count = 0
+    for row in rows[1:]:
+        if not condition_func(row):
+            new_rows.append(row)
+        else:
+            deleted_count += 1
+    if deleted_count > 0:
+        ws.clear()
+        ws.update(range_name='A1', values=new_rows)
+    return deleted_count
 
 # --- SCRAPERS ---
 
@@ -298,7 +320,9 @@ async def process_list_incremental(
         await init_browser()
         total = len(items)
         for i, val in enumerate(items):
-            if i < len(results) and results[i] != "..." and not (isinstance(results[i], str) and results[i].startswith("⚠️")):
+            # Only skip if we have a conclusive result (✅, ❌, 🚩). Skip 'N/A' or '...' or errors.
+            has_result = isinstance(results[i], str) and any(icon in results[i] for icon in ["✅", "❌", "🚩"])
+            if i < len(results) and results[i] != "..." and has_result:
                 progress_bar.progress((i + 1) / total)
                 continue
 
@@ -306,8 +330,12 @@ async def process_list_incremental(
                 status_text.text(f"♻️ Reiniciando navegador...")
                 await init_browser()
 
-            cleaned = str(val).strip().split('.')[0]
-            if not cleaned or cleaned == "nan" or not cleaned.isalnum(): res = "N/A"
+            # Improved Cleaning: Only auto-split if it looks like a numeric float from Excel (e.g. 123.0)
+            raw_str = str(val).strip()
+            if raw_str.endswith(".0"): cleaned = raw_str[:-2]
+            else: cleaned = raw_str
+            
+            if not cleaned or cleaned.lower() == "nan" or cleaned == "": res = "N/A"
             else:
                 status_text.text(f"🔍 [{i+1}/{total}] Processando: {cleaned}")
                 res = await checker_func(page, cleaned, **extra_params)
@@ -333,7 +361,9 @@ with tab_siac:
     st.info("🔦 **DICA:** Esta tab valida microchips na plataforma SIAC. Lê os números das colunas G (Fêmea) e H (Cria) e grava o resultado nas colunas I e J.")
     
     saved_links = load_links()
-    url_siac = st.text_input("URL Google Sheet (SIAC)", value=saved_links.get("siac", ""), key="url_siac")
+    # Use GLOBAL_DEFAULT_URL if no saved link exists
+    current_default = saved_links.get("siac") or GLOBAL_DEFAULT_URL
+    url_siac = st.text_input("URL Google Sheet (SIAC)", value=current_default, key="url_siac")
     if url_siac != saved_links.get("siac", ""):
         save_link("siac", url_siac)
 
@@ -345,6 +375,9 @@ with tab_siac:
                 try:
                     sh = gc.open_by_url(url_siac)
                     ws = get_worksheet_by_name(sh, "AUTO SIAC")
+                    if not ws:
+                        st.error("ERRO: Aba 'AUTO SIAC' não encontrada no ficheiro!")
+                        st.stop()
                     femeas = ws.col_values(7)[1:] # G
                     crias = ws.col_values(8)[1:]  # H
                     rows = max(len(femeas), len(crias))
@@ -364,8 +397,9 @@ with tab_siac:
                         if gc_i:
                             sh_i = gc_i.open_by_url(url_siac)
                             ws_i = get_worksheet_by_name(sh_i, "AUTO SIAC")
-                            ws_i.update(range_name=f"I2:I{1+len(sf)}", values=sf)
-                            ws_i.update(range_name=f"J2:J{1+len(sc)}", values=sc)
+                            if ws_i:
+                                ws_i.update(range_name=f"I2:I{1+len(sf)}", values=sf)
+                                ws_i.update(range_name=f"J2:J{1+len(sc)}", values=sc)
 
                     with st.spinner("Validando SIAC..."):
                         asyncio.run(process_list_incremental(interleaved, check_siac_on_page, init_url=SIAC_URL, callback=update_siac_gs))
@@ -381,21 +415,16 @@ with tab_siac:
                 if gc:
                     sh = gc.open_by_url(url_siac)
                     ws = get_worksheet_by_name(sh, "AUTO SIAC")
-                    with st.spinner("Limpando linhas com ambos registados..."):
+                    with st.spinner("Limpando linhas (Sincronizando com a folha)..."):
                         data = ws.get_all_values()
-                        to_delete = []
-                        for i, row in enumerate(data[1:], start=2):
-                            if len(row) > 9:
-                                val_i = str(row[8]).strip() # Col I
-                                val_j = str(row[9]).strip() # Col J
-                                if "✅ REGISTADO" in val_i and "✅ REGISTADO" in val_j:
-                                    to_delete.append(i)
+                        def is_siac_done(row):
+                            if len(row) < 10: return False
+                            # Exact match only, no alerts
+                            return row[8].strip() == "✅ REGISTADO" and row[9].strip() == "✅ REGISTADO"
                         
-                        if not to_delete: st.info("Nenhuma linha para remover.")
-                        else:
-                            for ridx in sorted(to_delete, reverse=True):
-                                ws.delete_rows(ridx)
-                            st.success(f"Removidas {len(to_delete)} linhas!")
+                        count = batch_clear_rows(ws, data, is_siac_done)
+                        if count > 0: st.success(f"Removidas {count} linhas!")
+                        else: st.info("Nenhuma linha para remover.")
             except Exception as e: st.error(f"Erro ao limpar: {e}")
 
 # --- TAB: RNT ---
@@ -404,7 +433,8 @@ with tab_rnt:
     st.info("🏠 **DICA:** Compara a localização do anúncio OLX com o registo RNAL. Lê o ID OLX na coluna A e o ID RNAL na coluna D. Devolve a localização do OLX na coluna C e o resultado na coluna F.")
     
     saved_links = load_links()
-    url_rnt = st.text_input("URL Google Sheet (RNT)", value=saved_links.get("rnt", ""), key="url_rnt")
+    current_default = saved_links.get("rnt") or GLOBAL_DEFAULT_URL
+    url_rnt = st.text_input("URL Google Sheet (RNT)", value=current_default, key="url_rnt")
     if url_rnt != saved_links.get("rnt", ""):
         save_link("rnt", url_rnt)
     
@@ -416,6 +446,9 @@ with tab_rnt:
                 try:
                     sh = gc.open_by_url(url_rnt)
                     ws = get_worksheet_by_name(sh, "AUTO RNAL")
+                    if not ws:
+                        st.error("ERRO: Aba 'AUTO RNAL' não encontrada no ficheiro!")
+                        st.stop()
                     olx_ids = ws.col_values(1)[1:] # A
                     rnal_ids = ws.col_values(4)[1:] # D
                     
@@ -425,19 +458,21 @@ with tab_rnt:
                         if gc_u:
                             sh_u = gc_u.open_by_url(url_rnt)
                             ws_u = get_worksheet_by_name(sh_u, "AUTO RNAL")
-                            olx_formatted = [[r[0]] for r in results]
-                            rnal_formatted = [[r[1]] for r in results]
-                            val_formatted = []
-                            for r in results:
-                                olx_l, rnt_l = str(r[0]).lower(), str(r[1]).lower()
-                                if r[0] == "..." or r[1] == "...": val_formatted.append(["..."])
-                                elif olx_l != "n/a" and rnt_l != "n/a" and any(word in rnt_l for word in olx_l.split()): 
-                                    val_formatted.append(["✅"])
-                                else: val_formatted.append(["❌"])
+                            if ws_u:
+                                olx_formatted = [[r[0]] for r in results]
+                                rnal_formatted = [[r[1]] for r in results]
+                                val_formatted = []
+                                for r in results:
+                                    olx_l, rnt_l = str(r[0]).lower(), str(r[1]).lower()
+                                    if any(s in str(r[0]) or s in str(r[1]) for s in ["...", "⚠️", "❓"]):
+                                        val_formatted.append(["..."])
+                                    elif olx_l != "n/a" and rnt_l != "n/a" and any(word in rnt_l for word in olx_l.split() if len(word) > 3): 
+                                        val_formatted.append(["✅"])
+                                    else: val_formatted.append(["❌"])
                                     
-                            ws_u.update(range_name=f"C2:C{1+len(olx_formatted)}", values=olx_formatted) # OLX Loc
-                            ws_u.update(range_name=f"E2:E{1+len(rnal_formatted)}", values=rnal_formatted) # RNAL Data
-                            ws_u.update(range_name=f"F2:F{1+len(val_formatted)}", values=val_formatted) # Validation
+                                ws_u.update(range_name=f"C2:C{1+len(olx_formatted)}", values=olx_formatted) # OLX Loc
+                                ws_u.update(range_name=f"E2:E{1+len(rnal_formatted)}", values=rnal_formatted) # RNAL Data
+                                ws_u.update(range_name=f"F2:F{1+len(val_formatted)}", values=val_formatted) # Validation
                     
                     async def al_checker(page, ids_tuple):
                         o_id, r_id = ids_tuple
@@ -458,7 +493,8 @@ with tab_olx:
     st.info("🚗 **DICA:** Valida os Km de carros no OLX. Compara os Km do sistema na coluna C com os Km encontrados no anúncio (ID na coluna A). O resultado vai para a coluna E.")
     
     saved_links = load_links()
-    url_olx = st.text_input("URL Google Sheet (OLX)", value=saved_links.get("olx", ""), key="url_olx")
+    current_default = saved_links.get("olx") or GLOBAL_DEFAULT_URL
+    url_olx = st.text_input("URL Google Sheet (OLX)", value=current_default, key="url_olx")
     if url_olx != saved_links.get("olx", ""):
         save_link("olx", url_olx)
     
@@ -470,6 +506,9 @@ with tab_olx:
                 try:
                     sh = gc.open_by_url(url_olx)
                     ws = get_worksheet_by_name(sh, "Auto Km")
+                    if not ws:
+                        st.error("ERRO: Aba 'Auto Km' não encontrada no ficheiro!")
+                        st.stop()
                     ids = ws.col_values(1)[1:] # Column A
                     system_km = ws.col_values(3)[1:] # Col C (User provided)
                     
@@ -479,10 +518,11 @@ with tab_olx:
                         if gc_u:
                             sh_u = gc_u.open_by_url(url_olx)
                             ws_u = get_worksheet_by_name(sh_u, "Auto Km")
-                            bot_km_fmt = [[r[0]] for r in results]
-                            val_fmt = [[r[1]] for r in results]
-                            ws_u.update(range_name=f"D2:D{1+len(bot_km_fmt)}", values=bot_km_fmt) # Col D
-                            ws_u.update(range_name=f"E2:E{1+len(val_fmt)}", values=val_fmt) # Col E
+                            if ws_u:
+                                bot_km_fmt = [[r[0]] for r in results]
+                                val_fmt = [[r[1]] for r in results]
+                                ws_u.update(range_name=f"D2:D{1+len(bot_km_fmt)}", values=bot_km_fmt) # Col D
+                                ws_u.update(range_name=f"E2:E{1+len(val_fmt)}", values=val_fmt) # Col E
                     
                     async def cars_checker(page, idx_val):
                         idx, ad_id = idx_val
@@ -516,19 +556,18 @@ with tab_olx:
                 if gc:
                     sh = gc.open_by_url(url_olx)
                     ws = get_worksheet_by_name(sh, "Auto Km")
-                    with st.spinner("Limpando linhas validadas..."):
+                    if not ws:
+                        st.error("ERRO: Aba 'Auto Km' não encontrada!")
+                        st.stop()
+                    with st.spinner("Limpando linhas (Sincronizando com a folha)..."):
                         data = ws.get_all_values()
-                        to_delete = []
-                        for i, row in enumerate(data[1:], start=2):
-                            if len(row) > 4:
-                                val_e = str(row[4]).strip() # Col E
-                                if "✅" in val_e: to_delete.append(i)
+                        def is_cars_done(row):
+                            if len(row) < 5: return False
+                            return "✅" in str(row[4])
                         
-                        if not to_delete: st.info("Nenhuma linha para remover.")
-                        else:
-                            for ridx in sorted(to_delete, reverse=True):
-                                ws.delete_rows(ridx)
-                            st.success(f"Removidas {len(to_delete)} linhas!")
+                        count = batch_clear_rows(ws, data, is_cars_done)
+                        if count > 0: st.success(f"Removidas {count} linhas!")
+                        else: st.info("Nenhuma linha para remover.")
             except Exception as e: st.error(f"Erro ao limpar: {e}")
 
 st.divider()
