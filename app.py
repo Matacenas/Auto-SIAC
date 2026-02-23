@@ -199,16 +199,18 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
                         const all = Array.from(document.querySelectorAll('span, p, a, div, h2, h3'));
                         const header = all.find(el => el.innerText && el.innerText.trim().toUpperCase() === 'LOCALIZAÇÃO');
                         if (header) {
-                            // Look at siblings or parent siblings
                             let parent = header.parentElement;
                             while (parent && parent.innerText.length < 20) {
                                 parent = parent.parentElement;
                             }
                             if (parent) {
-                                // Extract spans/links that look like location (usually 2 lines)
+                                // Filter specific parts, avoiding map metadata
                                 const parts = Array.from(parent.querySelectorAll('a[data-testid="ad-location-link"], span'))
-                                    .filter(el => el.innerText && el.innerText.length > 2 && !el.innerText.includes('Localização'))
-                                    .map(el => el.innerText.trim());
+                                    .map(el => el.innerText.trim())
+                                    .filter(t => t.length > 2 && 
+                                                 !t.toUpperCase().includes('LOCALIZAÇÃO') && 
+                                                 !t.toUpperCase().includes('MAP DATA') && 
+                                                 !t.includes('©'));
                                 if (parts.length > 0) return parts.slice(0, 2).join(' - ');
                             }
                         }
@@ -216,7 +218,10 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
                     };
 
                     const locLink = document.querySelector('a[data-testid="ad-location-link"]');
-                    if (locLink) return locLink.innerText.trim().replace('\\n', ' - ');
+                    if (locLink) {
+                        const text = locLink.innerText.trim();
+                        if (!text.toUpperCase().includes('MAP DATA')) return text.replace('\\n', ' - ');
+                    }
                     
                     return findInText();
                 }
@@ -566,29 +571,6 @@ with tab_olx:
                     st.success("Concluído!")
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
-
-    # --- BUTTON: CLEAR CARS ---
-    if st.button("🧹 Limpar Validados (Com ✅)", key="btns_clear_cars"):
-        if not url_olx: st.warning("Insira o URL.")
-        else:
-            try:
-                gc = get_gspread_client()
-                if gc:
-                    sh = gc.open_by_url(url_olx)
-                    ws = get_worksheet_by_name(sh, "Auto Km")
-                    if not ws:
-                        st.error("ERRO: Aba 'Auto Km' não encontrada!")
-                        st.stop()
-                    with st.spinner("Limpando linhas (Sincronizando com a folha)..."):
-                        data = ws.get_all_values()
-                        def is_cars_done(row):
-                            if len(row) < 5: return False
-                            return "✅" in str(row[4])
-                        
-                        count = batch_clear_rows(ws, data, is_cars_done)
-                        if count > 0: st.success(f"Removidas {count} linhas!")
-                        else: st.info("Nenhuma linha para remover.")
-            except Exception as e: st.error(f"Erro ao limpar: {e}")
 
 st.divider()
 st.caption("Validação Automática Multi-Project 2026")
