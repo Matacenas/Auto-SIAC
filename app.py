@@ -169,9 +169,13 @@ async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
             """)
             if km_val: return km_val
             
-            content = await page.content()
-            if any(text in content.lower() for text in ["não se encontra disponível", "anúncio removido", "já não está disponível"]):
+            content = (await page.content()).lower()
+            if "já não está disponível" in content:
                 return "⚠️ Anúncio já foi moderado ⚠️"
+            if "ups, algo não está bem" in content:
+                return "⚠️ Anúncio inactivo ⚠️"
+            if "não se encontra disponível" in content or "anúncio removido" in content:
+                return "🚫 Inativo/Vendido"
             if attempt < retries: await asyncio.sleep(2); continue
             return "❓ Km não encontrado"
         except:
@@ -583,7 +587,9 @@ with tab_olx:
                         found_km_clean = found_km_str.replace('km', '').replace(' ', '').replace('.', '').replace(',', '').strip().lower()
                         
                         validation = "..."
-                        if found_km_str != "...":
+                        if any(msg in found_km_str for msg in ["⚠️ Anúncio já foi moderado ⚠️", "⚠️ Anúncio inactivo ⚠️"]):
+                            validation = found_km_str
+                        elif found_km_str != "...":
                             if sys_km and found_km_clean and sys_km in found_km_clean: validation = "✅Km errados"
                             else: validation = "❌ Km corrigidos"
                         
