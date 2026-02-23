@@ -195,44 +195,52 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
             
             location = await page.evaluate("""
                 () => {
-                    const blacklist = ['MAP DATA', 'CLICK TO TOGGLE', 'METRIC', 'IMPERIAL', 'UNITS', '©', 'LOJA'];
+                    const blacklist = ['MAP DATA', 'CLICK TO TOGGLE', 'METRIC', 'IMPERIAL', 'UNITS', '©', 'LOJA', 'GEOGR'];
                     
                     const isMetadata = (text) => {
+                        if (!text) return true;
                         const t = text.trim();
+                        // Reject if contains distance pattern (e.g. "1 km", "500 m")
+                        if (/\\d+.*km/i.test(t) || /\\d+.*m\\s*$/i.test(t)) return true;
+                        // Reject if contains blacklist words
                         const up = t.toUpperCase();
-                        // Reject exact matches for distance like "1 km", "5 km"
-                        if (/^\d+[\d\s\.,]*\s*km$/i.test(t)) return true;
-                        // Reject if it's mostly map metadata phrases
                         return blacklist.some(b => up.includes(b));
                     };
 
-                    const findInText = () => {
-                        const all = Array.from(document.querySelectorAll('span, p, a, div, h2, h3'));
-                        const header = all.find(el => el.innerText && el.innerText.trim().toUpperCase() === 'LOCALIZAÇÃO');
-                        if (header) {
-                            let parent = header.parentElement;
-                            while (parent && parent.innerText.length < 20) {
-                                parent = parent.parentElement;
-                            }
-                            if (parent) {
-                                const parts = Array.from(parent.querySelectorAll('a[data-testid="ad-location-link"], span'))
-                                    .map(el => el.innerText.trim())
-                                    .filter(t => t.length > 2 && 
-                                                 !t.toUpperCase().includes('LOCALIZAÇÃO') && 
-                                                 !isMetadata(t));
-                                if (parts.length > 0) return parts.slice(0, 2).join(' - ');
-                            }
-                        }
+                    const surgicalExtract = (container) => {
+                        if (!container) return null;
+                        // Find all direct or deep text nodes/spans
+                        const elements = Array.from(container.querySelectorAll('span, a, p'))
+                            .map(el => el.innerText.trim())
+                            .filter(t => t.length > 2 && !isMetadata(t));
+                        
+                        // Deduplicate and join first 2 unique parts
+                        const unique = [...new Set(elements)];
+                        if (unique.length > 0) return unique.slice(0, 2).join(' - ');
                         return null;
                     };
 
+                    // Priority 1: Direct location link
                     const locLink = document.querySelector('a[data-testid="ad-location-link"]');
                     if (locLink) {
-                        const text = locLink.innerText.trim().replace(/\\n/g, ' - ');
-                        if (!isMetadata(text)) return text;
+                        const res = surgicalExtract(locLink);
+                        if (res) return res;
+                    }
+
+                    // Priority 2: Section search (fallback)
+                    const all = Array.from(document.querySelectorAll('span, p, a, div, h2, h3'));
+                    const header = all.find(el => el.innerText && el.innerText.trim().toUpperCase() === 'LOCALIZAÇÃO');
+                    if (header) {
+                        let parent = header.parentElement;
+                        // Go up a few levels to find the container
+                        for (let i = 0; i < 3 && parent; i++) {
+                            const res = surgicalExtract(parent);
+                            if (res) return res;
+                            parent = parent.parentElement;
+                        }
                     }
                     
-                    return findInText();
+                    return null;
                 }
             """)
             if location: return location
