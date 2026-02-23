@@ -195,6 +195,13 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
             
             location = await page.evaluate("""
                 () => {
+                    const blacklist = ['MAP DATA', 'CLICK TO TOGGLE', 'METRIC', 'IMPERIAL', 'UNITS', '©', 'LOJA'];
+                    
+                    const isMetadata = (text) => {
+                        const up = text.toUpperCase();
+                        return blacklist.some(b => up.includes(b));
+                    };
+
                     const findInText = () => {
                         const all = Array.from(document.querySelectorAll('span, p, a, div, h2, h3'));
                         const header = all.find(el => el.innerText && el.innerText.trim().toUpperCase() === 'LOCALIZAÇÃO');
@@ -204,13 +211,11 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
                                 parent = parent.parentElement;
                             }
                             if (parent) {
-                                // Filter specific parts, avoiding map metadata
                                 const parts = Array.from(parent.querySelectorAll('a[data-testid="ad-location-link"], span'))
                                     .map(el => el.innerText.trim())
                                     .filter(t => t.length > 2 && 
                                                  !t.toUpperCase().includes('LOCALIZAÇÃO') && 
-                                                 !t.toUpperCase().includes('MAP DATA') && 
-                                                 !t.includes('©'));
+                                                 !isMetadata(t));
                                 if (parts.length > 0) return parts.slice(0, 2).join(' - ');
                             }
                         }
@@ -219,8 +224,8 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
 
                     const locLink = document.querySelector('a[data-testid="ad-location-link"]');
                     if (locLink) {
-                        const text = locLink.innerText.trim();
-                        if (!text.toUpperCase().includes('MAP DATA')) return text.replace('\\n', ' - ');
+                        const text = locLink.innerText.trim().replace(/\\n/g, ' - ');
+                        if (!isMetadata(text)) return text;
                     }
                     
                     return findInText();
@@ -362,7 +367,7 @@ async def process_list_incremental(
             
             if not str(val).strip() or str(val).lower() == "nan": res = "N/A"
             else:
-                status_text.text(f"🔍 [{i+1}/{total}] Processando: {status_display}")
+                status_text.text(f"🔍 [{i+1}/{total}] A Trabalhar: {status_display}")
                 res = await checker_func(page, cleaned, **extra_params)
             
             results[i] = res
@@ -376,7 +381,7 @@ async def process_list_incremental(
 # --- UI LOGIC ---
 
 st.title("🚀 Validação Automática")
-st.markdown("Plataforma integrada para validação de dados SIAC, AL e OLX.")
+st.markdown("Plataforma para validação de dados SIAC, AL e OLX.")
 
 tab_siac, tab_rnt, tab_olx = st.tabs(["🐾 SIAC (Cães/Gatos)", "🏠 RNAL (AL)", "🚗 OLX (Km Carros)"])
 
@@ -426,7 +431,7 @@ with tab_siac:
                                 ws_i.update(range_name=f"I2:I{1+len(sf)}", values=sf)
                                 ws_i.update(range_name=f"J2:J{1+len(sc)}", values=sc)
 
-                    with st.spinner("Validando SIAC..."):
+                    with st.spinner("A validar o SIAC..."):
                         asyncio.run(process_list_incremental(interleaved, check_siac_on_page, init_url=SIAC_URL, callback=update_siac_gs))
                     st.success("Concluído!")
                 except Exception as e: st.error(f"Erro: {e}")
@@ -505,7 +510,7 @@ with tab_rnt:
                         rnt_data = await check_rnt_rnal_only(page, r_id)
                         return (olx_loc, rnt_data)
 
-                    with st.spinner("Validando AL (OLX vs RNAL)..."):
+                    with st.spinner("A Validar o AL (OLX vs RNAL)..."):
                         combined_ids = list(zip(olx_ids, rnal_ids))
                         asyncio.run(process_list_incremental(combined_ids, al_checker, callback=update_al_gs))
                     st.success("Concluído!")
