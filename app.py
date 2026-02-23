@@ -195,15 +195,30 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
             
             location = await page.evaluate("""
                 () => {
-                    const locElement = document.querySelector('a[data-testid="ad-location-link"] span');
-                    if (locElement) return locElement.innerText.trim();
+                    const findInText = () => {
+                        const all = Array.from(document.querySelectorAll('span, p, a, div, h2, h3'));
+                        const header = all.find(el => el.innerText && el.innerText.trim().toUpperCase() === 'LOCALIZAÇÃO');
+                        if (header) {
+                            // Look at siblings or parent siblings
+                            let parent = header.parentElement;
+                            while (parent && parent.innerText.length < 20) {
+                                parent = parent.parentElement;
+                            }
+                            if (parent) {
+                                // Extract spans/links that look like location (usually 2 lines)
+                                const parts = Array.from(parent.querySelectorAll('a[data-testid="ad-location-link"], span'))
+                                    .filter(el => el.innerText && el.innerText.length > 2 && !el.innerText.includes('Localização'))
+                                    .map(el => el.innerText.trim());
+                                if (parts.length > 0) return parts.slice(0, 2).join(' - ');
+                            }
+                        }
+                        return null;
+                    };
+
+                    const locLink = document.querySelector('a[data-testid="ad-location-link"]');
+                    if (locLink) return locLink.innerText.trim().replace('\\n', ' - ');
                     
-                    const allSpans = Array.from(document.querySelectorAll('span, p, a, div'));
-                    // Look for common patterns or specific classes
-                    const loc = allSpans.find(s => s.innerText && (s.innerText.includes('Localização') || s.className.includes('location')));
-                    if (loc && loc.nextElementSibling) return loc.nextElementSibling.innerText.trim();
-                    
-                    return null;
+                    return findInText();
                 }
             """)
             if location: return location
@@ -540,8 +555,8 @@ with tab_olx:
                         
                         validation = "..."
                         if found_km_str != "...":
-                            if sys_km and found_km_clean and sys_km in found_km_clean: validation = "✅"
-                            else: validation = "❌ Km errados"
+                            if sys_km and found_km_clean and sys_km in found_km_clean: validation = "✅Km errados"
+                            else: validation = "❌ Km corrigidos"
                         
                         return (found_km_str, validation)
 
