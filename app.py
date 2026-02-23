@@ -447,7 +447,7 @@ with tab_rnt:
 
                     with st.spinner("Validando AL (OLX vs RNAL)..."):
                         combined_ids = list(zip(olx_ids, rnal_ids))
-                        await process_list_incremental(combined_ids, al_checker, callback=update_al_gs)
+                        asyncio.run(process_list_incremental(combined_ids, al_checker, callback=update_al_gs))
                     st.success("Concluído!")
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
@@ -502,7 +502,7 @@ with tab_olx:
 
                     with st.spinner("Validando anúncios OLX..."):
                         # We pass index to cars_checker to access system_km
-                        await process_list_incremental(list(enumerate(ids)), cars_checker, callback=update_cars_gs, batch_size=10)
+                        asyncio.run(process_list_incremental(list(enumerate(ids)), cars_checker, callback=update_cars_gs, batch_size=10))
                     st.success("Concluído!")
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
