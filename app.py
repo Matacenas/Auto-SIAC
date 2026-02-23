@@ -195,7 +195,7 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
             
             location = await page.evaluate("""
                 () => {
-                    const blacklist = ['MAP DATA', 'CLICK TO TOGGLE', 'METRIC', 'IMPERIAL', 'UNITS', '©', 'LOJA', 'GEOGR'];
+                    const blacklist = ['LOCALIZAÇÃO', 'MAP DATA', 'CLICK TO TOGGLE', 'METRIC', 'IMPERIAL', 'UNITS', '©', 'LOJA', 'GEOGR'];
                     
                     const isMetadata = (text) => {
                         if (!text) return true;
