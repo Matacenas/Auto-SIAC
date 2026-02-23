@@ -5,9 +5,26 @@ from playwright.async_api import async_playwright
 import gspread
 from google.oauth2.service_account import Credentials
 import os
+import json
 from typing import List, Optional, Callable, Awaitable, Any
 
 # --- CONFIGURATION ---
+LINKS_FILE = "links.json"
+
+def load_links():
+    if os.path.exists(LINKS_FILE):
+        try:
+            with open(LINKS_FILE, "r") as f:
+                return json.load(f)
+        except: return {}
+    return {}
+
+def save_link(key, url):
+    links = load_links()
+    links[key] = url
+    with open(LINKS_FILE, "w") as f:
+        json.dump(links, f)
+
 SIAC_URL = "https://www.siac.pt/pt"
 OLX_BASE_URL = "https://www.olx.pt/"
 RNT_AL_DIRECT_URL = "https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr="
@@ -37,6 +54,13 @@ def get_gspread_client():
     except Exception as e:
         st.error(f"Erro na autenticação: {e}")
         return None
+
+def get_worksheet_by_name(sh, target_name):
+    """Try to find worksheet by name, fallback to first worksheet."""
+    try:
+        return sh.worksheet(target_name)
+    except:
+        return sh.get_worksheet(0)
 
 # --- SCRAPERS ---
 
@@ -133,6 +157,41 @@ async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
             return "⚠️ Erro Conexão"
     return "⚠️ Erro"
 
+async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
+    """Extracts location from OLX ad."""
+    if not ad_id or str(ad_id).lower() == 'nan': return "N/A"
+    
+    if str(ad_id).isdigit():
+        ad_url = f"{OLX_BASE_URL}{ad_id}"
+    else:
+        ad_url = ad_id if str(ad_id).startswith('http') else f"{OLX_BASE_URL}d/anuncio/{ad_id}.html"
+
+    for attempt in range(retries + 1):
+        try:
+            await page.goto(ad_url, timeout=45000, wait_until="domcontentloaded")
+            await asyncio.sleep(4)
+            
+            location = await page.evaluate("""
+                () => {
+                    const locElement = document.querySelector('a[data-testid="ad-location-link"] span');
+                    if (locElement) return locElement.innerText.trim();
+                    
+                    const allSpans = Array.from(document.querySelectorAll('span, p, a, div'));
+                    // Look for common patterns or specific classes
+                    const loc = allSpans.find(s => s.innerText && (s.innerText.includes('Localização') || s.className.includes('location')));
+                    if (loc && loc.nextElementSibling) return loc.nextElementSibling.innerText.trim();
+                    
+                    return null;
+                }
+            """)
+            if location: return location
+            if attempt < retries: await asyncio.sleep(2); continue
+            return "❓ Localização"
+        except:
+            if attempt < retries: await asyncio.sleep(2); continue
+            return "⚠️ Conexão"
+    return "⚠️ Erro"
+
 async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
     """Validates registration in RNAL (Direct detail) with grid fallback."""
     res = "❓ Sem Dados"
@@ -210,7 +269,7 @@ async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
 # --- CORE ENGINE ---
 
 async def process_list_incremental(
-    items: List[str], 
+    items: List[Any], 
     checker_func: Callable, 
     init_url: Optional[str] = None,
     existing_results: Optional[List[Any]] = None, 
@@ -266,12 +325,18 @@ async def process_list_incremental(
 st.title("🚀 Validação Automática")
 st.markdown("Plataforma integrada para validação de dados SIAC, AL e OLX.")
 
-tab_siac, tab_rnt, tab_olx = st.tabs(["🐾 SIAC (Cães/Gatos)", "🏠 AL (RNAL)", "🚗 OLX (Carros)"])
+tab_siac, tab_rnt, tab_olx = st.tabs(["🐾 SIAC (Cães/Gatos)", "🏠 RNAL (AL)", "🚗 OLX (Km Carros)"])
 
 # --- TAB: SIAC ---
 with tab_siac:
     st.subheader("Validação SIAC")
-    url_siac = st.text_input("URL Google Sheet (SIAC)", key="url_siac")
+    st.info("🔦 **DICA:** Esta tab valida microchips na plataforma SIAC. Lê os números das colunas G (Fêmea) e H (Cria) e grava o resultado nas colunas I e J.")
+    
+    saved_links = load_links()
+    url_siac = st.text_input("URL Google Sheet (SIAC)", value=saved_links.get("siac", ""), key="url_siac")
+    if url_siac != saved_links.get("siac", ""):
+        save_link("siac", url_siac)
+
     if st.button("🚀 Iniciar Validação SIAC", key="btn_run_siac"):
         if not url_siac: st.warning("Insira o URL.")
         else:
@@ -279,7 +344,7 @@ with tab_siac:
             if gc:
                 try:
                     sh = gc.open_by_url(url_siac)
-                    ws = sh.get_worksheet(0)
+                    ws = get_worksheet_by_name(sh, "AUTO SIAC")
                     femeas = ws.col_values(7)[1:] # G
                     crias = ws.col_values(8)[1:]  # H
                     rows = max(len(femeas), len(crias))
@@ -298,7 +363,7 @@ with tab_siac:
                         gc_i = get_gspread_client()
                         if gc_i:
                             sh_i = gc_i.open_by_url(url_siac)
-                            ws_i = sh_i.get_worksheet(0)
+                            ws_i = get_worksheet_by_name(sh_i, "AUTO SIAC")
                             ws_i.update(range_name=f"I2:I{1+len(sf)}", values=sf)
                             ws_i.update(range_name=f"J2:J{1+len(sc)}", values=sc)
 
@@ -307,11 +372,41 @@ with tab_siac:
                     st.success("Concluído!")
                 except Exception as e: st.error(f"Erro: {e}")
 
+    # --- BUTTON: CLEAR SIAC ---
+    if st.button("🧹 Limpar Registados (Ambos ✅)", key="btns_clear_siac"):
+        if not url_siac: st.warning("Insira o URL.")
+        else:
+            try:
+                gc = get_gspread_client()
+                if gc:
+                    sh = gc.open_by_url(url_siac)
+                    ws = get_worksheet_by_name(sh, "AUTO SIAC")
+                    with st.spinner("Limpando linhas com ambos registados..."):
+                        data = ws.get_all_values()
+                        to_delete = []
+                        for i, row in enumerate(data[1:], start=2):
+                            if len(row) > 9:
+                                val_i = str(row[8]).strip() # Col I
+                                val_j = str(row[9]).strip() # Col J
+                                if "✅ REGISTADO" in val_i and "✅ REGISTADO" in val_j:
+                                    to_delete.append(i)
+                        
+                        if not to_delete: st.info("Nenhuma linha para remover.")
+                        else:
+                            for ridx in sorted(to_delete, reverse=True):
+                                ws.delete_rows(ridx)
+                            st.success(f"Removidas {len(to_delete)} linhas!")
+            except Exception as e: st.error(f"Erro ao limpar: {e}")
+
 # --- TAB: RNT ---
 with tab_rnt:
     st.subheader("Validação RNAL")
-    st.info("💡 Valida o ID na coluna E e devolve Morada/Dados na coluna F.")
-    url_rnt = st.text_input("URL Google Sheet (RNT)", key="url_rnt")
+    st.info("🏠 **DICA:** Compara a localização do anúncio OLX com o registo RNAL. Lê o ID OLX na coluna A e o ID RNAL na coluna D. Devolve a localização do OLX na coluna C e o resultado na coluna F.")
+    
+    saved_links = load_links()
+    url_rnt = st.text_input("URL Google Sheet (RNT)", value=saved_links.get("rnt", ""), key="url_rnt")
+    if url_rnt != saved_links.get("rnt", ""):
+        save_link("rnt", url_rnt)
     
     if st.button("🚀 Iniciar Validação RNAL", key="btn_run_rnt"):
         if not url_rnt: st.warning("Insira o URL.")
@@ -320,19 +415,39 @@ with tab_rnt:
             if gc:
                 try:
                     sh = gc.open_by_url(url_rnt)
-                    ws = sh.get_worksheet(0)
-                    regs = ws.col_values(5)[1:] # Column E
+                    ws = get_worksheet_by_name(sh, "AUTO RNAL")
+                    olx_ids = ws.col_values(1)[1:] # A
+                    rnal_ids = ws.col_values(4)[1:] # D
                     
-                    async def update_rnt_gs(res):
+                    async def update_al_gs(results):
+                        # results is a list of (olx_loc, rnal_loc)
                         gc_u = get_gspread_client()
                         if gc_u:
                             sh_u = gc_u.open_by_url(url_rnt)
-                            ws_u = sh_u.get_worksheet(0)
-                            formatted = [[r] for r in res]
-                            ws_u.update(range_name=f"F2:F{1+len(formatted)}", values=formatted)
+                            ws_u = get_worksheet_by_name(sh_u, "AUTO RNAL")
+                            olx_formatted = [[r[0]] for r in results]
+                            rnal_formatted = [[r[1]] for r in results]
+                            val_formatted = []
+                            for r in results:
+                                olx_l, rnt_l = str(r[0]).lower(), str(r[1]).lower()
+                                if r[0] == "..." or r[1] == "...": val_formatted.append(["..."])
+                                elif olx_l != "n/a" and rnt_l != "n/a" and any(word in rnt_l for word in olx_l.split()): 
+                                    val_formatted.append(["✅"])
+                                else: val_formatted.append(["❌"])
+                                    
+                            ws_u.update(range_name=f"C2:C{1+len(olx_formatted)}", values=olx_formatted) # OLX Loc
+                            ws_u.update(range_name=f"E2:E{1+len(rnal_formatted)}", values=rnal_formatted) # RNAL Data
+                            ws_u.update(range_name=f"F2:F{1+len(val_formatted)}", values=val_formatted) # Validation
                     
-                    with st.spinner("Validando RNAL detalhado..."):
-                        asyncio.run(process_list_incremental(regs, check_rnt_rnal_only, callback=update_rnt_gs))
+                    async def al_checker(page, ids_tuple):
+                        o_id, r_id = ids_tuple
+                        olx_loc = await check_olx_location(page, o_id)
+                        rnt_data = await check_rnt_rnal_only(page, r_id)
+                        return (olx_loc, rnt_data)
+
+                    with st.spinner("Validando AL (OLX vs RNAL)..."):
+                        combined_ids = list(zip(olx_ids, rnal_ids))
+                        await process_list_incremental(combined_ids, al_checker, callback=update_al_gs)
                     st.success("Concluído!")
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
@@ -340,7 +455,12 @@ with tab_rnt:
 # --- TAB: OLX ---
 with tab_olx:
     st.subheader("Validação de Km no OLX")
-    url_olx = st.text_input("URL Google Sheet (OLX)", key="url_olx")
+    st.info("🚗 **DICA:** Valida os Km de carros no OLX. Compara os Km do sistema na coluna C com os Km encontrados no anúncio (ID na coluna A). O resultado vai para a coluna E.")
+    
+    saved_links = load_links()
+    url_olx = st.text_input("URL Google Sheet (OLX)", value=saved_links.get("olx", ""), key="url_olx")
+    if url_olx != saved_links.get("olx", ""):
+        save_link("olx", url_olx)
     
     if st.button("🚀 Iniciar Validação Km", key="btn_run_olx"):
         if not url_olx: st.warning("Insira o URL.")
@@ -349,22 +469,67 @@ with tab_olx:
             if gc:
                 try:
                     sh = gc.open_by_url(url_olx)
-                    ws = sh.get_worksheet(0)
+                    ws = get_worksheet_by_name(sh, "Auto Km")
                     ids = ws.col_values(1)[1:] # Column A
+                    system_km = ws.col_values(3)[1:] # Col C (User provided)
                     
-                    async def update_olx(results):
+                    async def update_cars_gs(results):
+                        # results is a list of (found_km, validation)
                         gc_u = get_gspread_client()
                         if gc_u:
                             sh_u = gc_u.open_by_url(url_olx)
-                            ws_u = sh_u.get_worksheet(0)
-                            formatted = [[r] for r in results]
-                            ws_u.update(range_name=f"B2:B{1+len(formatted)}", values=formatted) # Column B
+                            ws_u = get_worksheet_by_name(sh_u, "Auto Km")
+                            bot_km_fmt = [[r[0]] for r in results]
+                            val_fmt = [[r[1]] for r in results]
+                            ws_u.update(range_name=f"D2:D{1+len(bot_km_fmt)}", values=bot_km_fmt) # Col D
+                            ws_u.update(range_name=f"E2:E{1+len(val_fmt)}", values=val_fmt) # Col E
                     
+                    async def cars_checker(page, idx_val):
+                        idx, ad_id = idx_val
+                        # Get found KM from OLX
+                        found_km_str = await check_olx_km(page, ad_id)
+                        
+                        # Compare with system_km from Col C
+                        sys_km = str(system_km[idx]).replace(' ', '').replace('.', '').replace(',', '').strip() if idx < len(system_km) else ""
+                        found_km_clean = found_km_str.replace('km', '').replace(' ', '').replace('.', '').replace(',', '').strip().lower()
+                        
+                        validation = "..."
+                        if found_km_str != "...":
+                            if sys_km and found_km_clean and sys_km in found_km_clean: validation = "✅"
+                            else: validation = "❌ Km errados"
+                        
+                        return (found_km_str, validation)
+
                     with st.spinner("Validando anúncios OLX..."):
-                        asyncio.run(process_list_incremental(ids, check_olx_km, callback=update_olx, batch_size=10))
+                        # We pass index to cars_checker to access system_km
+                        await process_list_incremental(list(enumerate(ids)), cars_checker, callback=update_cars_gs, batch_size=10)
                     st.success("Concluído!")
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
+
+    # --- BUTTON: CLEAR CARS ---
+    if st.button("🧹 Limpar Validados (Com ✅)", key="btns_clear_cars"):
+        if not url_olx: st.warning("Insira o URL.")
+        else:
+            try:
+                gc = get_gspread_client()
+                if gc:
+                    sh = gc.open_by_url(url_olx)
+                    ws = get_worksheet_by_name(sh, "Auto Km")
+                    with st.spinner("Limpando linhas validadas..."):
+                        data = ws.get_all_values()
+                        to_delete = []
+                        for i, row in enumerate(data[1:], start=2):
+                            if len(row) > 4:
+                                val_e = str(row[4]).strip() # Col E
+                                if "✅" in val_e: to_delete.append(i)
+                        
+                        if not to_delete: st.info("Nenhuma linha para remover.")
+                        else:
+                            for ridx in sorted(to_delete, reverse=True):
+                                ws.delete_rows(ridx)
+                            st.success(f"Removidas {len(to_delete)} linhas!")
+            except Exception as e: st.error(f"Erro ao limpar: {e}")
 
 st.divider()
 st.caption("Validação Automática Multi-Project 2026")
