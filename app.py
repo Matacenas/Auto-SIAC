@@ -595,13 +595,34 @@ with tab_olx:
                         
                         return (found_km_str, validation)
 
-                    with st.spinner("Validando anúncios OLX..."):
+                    with st.spinner("A Validar anúncios do OLX..."):
                         # Pass zipped list to show Ad ID in status
                         combined = list(zip(ids, system_km))
                         asyncio.run(process_list_incremental(combined, cars_checker, callback=update_cars_gs, batch_size=10))
                     st.success("Concluído!")
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
+
+    # --- BUTTON: CLEAR OLX ---
+    if st.button("🧹 Limpar Moderados/Inactivos", key="btn_clear_olx"):
+        if not url_olx: st.warning("Insira o URL.")
+        else:
+            try:
+                gc = get_gspread_client()
+                if gc:
+                    sh = gc.open_by_url(url_olx)
+                    ws = get_worksheet_by_name(sh, "Auto Km")
+                    with st.spinner("Limpando linhas (Sincronizando com a folha)..."):
+                        data = ws.get_all_values()
+                        def is_olx_cleanup(row):
+                            if len(row) < 5: return False
+                            status = row[4].strip() # Col E
+                            return any(msg in status for msg in ["⚠️ Anúncio já foi moderado ⚠️", "⚠️ Anúncio inactivo ⚠️"])
+                        
+                        count = batch_clear_rows(ws, data, is_olx_cleanup)
+                        if count > 0: st.success(f"Removidas {count} linhas!")
+                        else: st.info("Nenhuma linha para remover.")
+            except Exception as e: st.error(f"Erro ao limpar: {e}")
 
 st.divider()
 st.caption("Validação Automática Multi-Project 2026")
