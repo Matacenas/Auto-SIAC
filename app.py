@@ -47,10 +47,9 @@ TRANSLATIONS = {
         "sheet_urls": "🔗 URLs do Google Sheets",
         "siac_tab": "🐾 SIAC",
         "siac_sub": "🐾 SIAC - Cães e Gatos",
-        "rnal_tab": "🏠 RNAL",
         "rnal_sub": "🏠 RNAL - Alojamento Local",
-        "olx_tab": "🚗 OLX",
         "olx_sub": "🚗 OLX - Km Carros",
+        "gs_url_label": "URL Google Sheet",
         "btn_start": "🚀 Iniciar Validação",
         "btn_open_sheet": "📖 Abrir Folha",
         "btn_clear_reg": "🧹 Limpar Registados (Ambos ✅)",
@@ -82,10 +81,9 @@ TRANSLATIONS = {
         "sheet_urls": "🔗 Google Sheets URLs",
         "siac_tab": "🐾 SIAC",
         "siac_sub": "🐾 SIAC - Dogs and Cats",
-        "rnal_tab": "🏠 RNAL",
         "rnal_sub": "🏠 RNAL - Local Accommodation",
-        "olx_tab": "🚗 OLX",
         "olx_sub": "🚗 OLX - Car Mileage",
+        "gs_url_label": "Google Sheet URL",
         "btn_start": "🚀 Start Validation",
         "btn_open_sheet": "📖 Open Sheet",
         "btn_clear_reg": "🧹 Clear Registered (Both ✅)",
@@ -125,25 +123,34 @@ st.markdown("""
     <style>
     /* Shrink the sidebar a bit */
     [data-testid="stSidebar"] { min-width: 250px; max-width: 300px; }
-    /* Make Alert/Info boxes shrink to text width */
-    .stAlert { width: fit-content !important; min-width: 200px; max-width: 100%; }
+    /* Make Alert/Info boxes shrink to text width and look more professional */
+    [data-testid="stNotification"] { width: fit-content !important; min-width: 300px; max-width: 100%; border-radius: 10px; }
+    .stAlert { width: fit-content !important; min-width: 300px; max-width: 100%; border-radius: 10px; padding: 10px 20px; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- SIDEBAR ---
 with st.sidebar:
     st.header(t("sidebar_config"))
-    # Improved labels for Windows (using text indicators since flags often fail)
-    lang_opts = ["🇵🇹 PT - Português", "🇬🇧 EN - English"]
-    choice = st.radio(t("lang_sel"), lang_opts, index=0 if st.session_state.lang == "PT" else 1)
-    st.session_state.lang = "PT" if "PT" in choice else "EN"
+    
+    # Professional Language Switcher with Flags
+    cola, colb = st.columns(2)
+    with cola:
+        if st.button("🇵🇹 PT", use_container_width=True):
+            st.session_state.lang = "PT"
+            st.rerun()
+    with colb:
+        if st.button("🇬🇧 EN", use_container_width=True):
+            st.session_state.lang = "EN"
+            st.rerun()
     
     st.divider()
     saved_links = load_links()
 
-    # Consolidated URL
+    # Consolidated URL - Larger Label
+    st.markdown(f"### {t('gs_url_label')}")
     current_gs = saved_links.get("gs_url") or GLOBAL_DEFAULT_URL
-    url_gs = st.text_input("URL Google Sheet", value=current_gs)
+    url_gs = st.text_input("", value=current_gs, label_visibility="collapsed")
     if url_gs != saved_links.get("gs_url", ""): save_link("gs_url", url_gs)
     
     if url_gs:
