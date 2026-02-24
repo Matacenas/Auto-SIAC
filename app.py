@@ -141,12 +141,14 @@ st.markdown("""
     }
     button[data-baseweb="tab"] p { font-size: 24px !important; }
     
-    /* Shrink the underline of the tabs */
-    div[data-baseweb="tab-list"] { width: fit-content !important; max-width: 600px; }
-    div[data-baseweb="tab-border"] { width: fit-content !important; max-width: 600px; }
+    /* Shrink the underline of the tabs and unified dividers */
+    div[data-baseweb="tab-list"] { width: 500px !important; }
+    div[data-baseweb="tab-border"] { width: 500px !important; }
     
-    /* SHRINK DIVIDERS to match TIP boxes (~400px) */
-    hr { width: 400px !important; margin-left: 0 !important; border-top: 2px solid #555; }
+    /* UNIFY ALL DIVIDERS AND TIP BOXES (~500px) */
+    hr { width: 500px !important; margin-left: 0 !important; border-top: 2px solid #555; }
+    [data-testid="stNotification"] { width: 500px !important; border-radius: 10px; }
+    .stAlert { width: 500px !important; border-radius: 10px; padding: 10px 20px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -154,18 +156,18 @@ st.markdown("""
 with st.sidebar:
     st.header(t("sidebar_config"))
     
-    # Language Switcher - Vertical with Flag + Text
+    # Language Switcher - Vertical with Flag + Text (Pixel Perfect Alignment)
     # PT
-    colx1, colx2 = st.columns([1, 3])
-    with colx1: st.image("https://flagcdn.com/w40/pt.png", width=40)
+    colx1, colx2 = st.columns([1, 4])
+    with colx1: st.markdown("<div style='margin-top: 8px;'>", unsafe_allow_html=True); st.image("https://flagcdn.com/w40/pt.png", width=30); st.markdown("</div>", unsafe_allow_html=True)
     with colx2:
-        if st.button("Português", key="btn_pt_v2", use_container_width=True):
+        if st.button("Português", key="btn_pt_v3", use_container_width=True):
             st.session_state.lang = "PT"; st.rerun()
     # EN
-    coly1, coly2 = st.columns([1, 3])
-    with coly1: st.image("https://flagcdn.com/w40/gb.png", width=40)
+    coly1, coly2 = st.columns([1, 4])
+    with coly1: st.markdown("<div style='margin-top: 8px;'>", unsafe_allow_html=True); st.image("https://flagcdn.com/w40/gb.png", width=30); st.markdown("</div>", unsafe_allow_html=True)
     with coly2:
-        if st.button("English", key="btn_en_v2", use_container_width=True):
+        if st.button("English", key="btn_en_v3", use_container_width=True):
             st.session_state.lang = "EN"; st.rerun()
     
     st.divider()
