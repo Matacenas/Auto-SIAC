@@ -159,15 +159,15 @@ with st.sidebar:
     # Language Switcher - Vertical with Flag + Text (Pixel Perfect Alignment)
     # PT
     colx1, colx2 = st.columns([1, 4])
-    with colx1: st.markdown("<div style='margin-top: 8px;'>", unsafe_allow_html=True); st.image("https://flagcdn.com/w40/pt.png", width=30); st.markdown("</div>", unsafe_allow_html=True)
+    with colx1: st.markdown("<div style='margin-top: 4px;'>", unsafe_allow_html=True); st.image("https://flagcdn.com/w80/pt.png", width=45); st.markdown("</div>", unsafe_allow_html=True)
     with colx2:
-        if st.button("Português", key="btn_pt_v3", use_container_width=True):
+        if st.button("Português", key="btn_pt_v4", use_container_width=True):
             st.session_state.lang = "PT"; st.rerun()
     # EN
     coly1, coly2 = st.columns([1, 4])
-    with coly1: st.markdown("<div style='margin-top: 8px;'>", unsafe_allow_html=True); st.image("https://flagcdn.com/w40/gb.png", width=30); st.markdown("</div>", unsafe_allow_html=True)
+    with coly1: st.markdown("<div style='margin-top: 4px;'>", unsafe_allow_html=True); st.image("https://flagcdn.com/w80/gb.png", width=45); st.markdown("</div>", unsafe_allow_html=True)
     with coly2:
-        if st.button("English", key="btn_en_v3", use_container_width=True):
+        if st.button("English", key="btn_en_v4", use_container_width=True):
             st.session_state.lang = "EN"; st.rerun()
     
     st.divider()
