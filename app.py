@@ -131,7 +131,7 @@ st.markdown("""
     [data-testid="stNotification"] { width: fit-content !important; min-width: 300px; max-width: 100%; border-radius: 10px; }
     .stAlert { width: fit-content !important; min-width: 300px; max-width: 100%; border-radius: 10px; padding: 10px 20px; }
     
-    /* ENLARGE TABS */
+    /* ENLARGE TABS AND SHRINK BORDER */
     button[data-baseweb="tab"] { 
         font-size: 24px !important; 
         height: 60px !important; 
@@ -141,7 +141,11 @@ st.markdown("""
     }
     button[data-baseweb="tab"] p { font-size: 24px !important; }
     
-    /* SHRINK DIVIDERS to match TIP boxes */
+    /* Shrink the underline of the tabs */
+    div[data-baseweb="tab-list"] { width: fit-content !important; max-width: 600px; }
+    div[data-baseweb="tab-border"] { width: fit-content !important; max-width: 600px; }
+    
+    /* SHRINK DIVIDERS to match TIP boxes (~400px) */
     hr { width: 400px !important; margin-left: 0 !important; border-top: 2px solid #555; }
     </style>
     """, unsafe_allow_html=True)
@@ -150,18 +154,19 @@ st.markdown("""
 with st.sidebar:
     st.header(t("sidebar_config"))
     
-    # Language Switcher - Flag Images (Final attempt for Windows)
-    cola, colb = st.columns(2)
-    with cola:
-        st.image("https://flagcdn.com/w80/pt.png", width=80)
-        if st.button(" ", key="btn_pt_final", use_container_width=True):
-            st.session_state.lang = "PT"
-            st.rerun()
-    with colb:
-        st.image("https://flagcdn.com/w80/gb.png", width=80)
-        if st.button(" ", key="btn_en_final", use_container_width=True):
-            st.session_state.lang = "EN"
-            st.rerun()
+    # Language Switcher - Vertical with Flag + Text
+    # PT
+    colx1, colx2 = st.columns([1, 3])
+    with colx1: st.image("https://flagcdn.com/w40/pt.png", width=40)
+    with colx2:
+        if st.button("Português", key="btn_pt_v2", use_container_width=True):
+            st.session_state.lang = "PT"; st.rerun()
+    # EN
+    coly1, coly2 = st.columns([1, 3])
+    with coly1: st.image("https://flagcdn.com/w40/gb.png", width=40)
+    with coly2:
+        if st.button("English", key="btn_en_v2", use_container_width=True):
+            st.session_state.lang = "EN"; st.rerun()
     
     st.divider()
     saved_links = load_links()
