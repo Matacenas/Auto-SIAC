@@ -10,7 +10,7 @@ from typing import List, Optional, Callable, Awaitable, Any
 
 # --- CONFIGURATION ---
 LINKS_FILE = "links.json"
-GLOBAL_DEFAULT_URL = "https://docs.google.com/spreadsheets/d/17sq7E56TExN8Icw9Du2oUiuzhLDzfb4VmTgFmJGS1Do" # Corrected URL
+GLOBAL_DEFAULT_URL = "https://docs.google.com/spreadsheets/d/17sq7E56TExN8Icw9Du2oUiuzhLDzfb4VmTgFmJGS1Do"
 
 def load_links():
     if os.path.exists(LINKS_FILE):
@@ -23,6 +23,8 @@ def load_links():
 def save_link(key, url):
     links = load_links()
     links[key] = url
+    if not os.path.exists(os.path.dirname(LINKS_FILE)) and os.path.dirname(LINKS_FILE):
+        os.makedirs(os.path.dirname(LINKS_FILE))
     with open(LINKS_FILE, "w") as f:
         json.dump(links, f)
 
@@ -35,7 +37,104 @@ SIAC_TEXT_REGISTERED = "Animal com registo no SIAC"
 SIAC_TEXT_NOT_REGISTERED = "Animal sem registo"
 SIAC_TEXT_MISSING = "Animal com registo no SIAC e que se encontra desaparecido"
 
+# --- I18N SYSTEM ---
+TRANSLATIONS = {
+    "PT": {
+        "title": "🚀 Validação Automática",
+        "subtitle": "Plataforma para validação de dados SIAC, AL e OLX.",
+        "sidebar_config": "⚙️ Configurações",
+        "lang_sel": "Escolha o Idioma / Language",
+        "sheet_urls": "🔗 URLs do Google Sheets",
+        "siac_tab": "🐾 SIAC (Cães/Gatos)",
+        "rnal_tab": "🏠 RNAL (AL)",
+        "olx_tab": "🚗 OLX (Km Carros)",
+        "btn_start": "🚀 Iniciar Validação",
+        "btn_clear_reg": "🧹 Limpar Registados (Ambos ✅)",
+        "btn_clear_mod": "🧹 Limpar Moderados/Inactivos",
+        "btn_clear_loc": "🧹 Limpar Localização Correcta",
+        "status_working": "🔍 [{}/{}] A Trabalhar: {}",
+        "status_done": "Concluído!",
+        "err_no_url": "Insira o URL.",
+        "err_no_sheet": "ERRO: Aba '{}' não encontrada no ficheiro!",
+        "dica_siac": "🔦 **DICA:** Esta tab valida microchips na plataforma SIAC. Lê os números das colunas G e H e grava em I e J.",
+        "dica_rnal": "🏠 **DICA:** Compara a localização do anúncio OLX com o registo RNAL. Lê colunas A e D, grava em C, E e F.",
+        "dica_olx": "🚗 **DICA:** Valida os Km de carros no OLX. Compara Col C com o anúncio (Col A). Grava em E.",
+        "restarting_browser": "♻️ Reiniciando navegador para estabilidade...",
+        "val_waiting": "⚠️ Sem resultado - Confirmar no RNET ⚠️",
+        "val_correct": "✅Localização Correcta ✅",
+        "val_wrong": "❌ Localização Errada ❌",
+        "km_wrong": "✅Km errados",
+        "km_fixed": "❌ Km corrigidos",
+        "cleaning": "Limpando linhas (Sincronizando com a folha)...",
+        "rows_removed": "Removidas {} linhas!",
+        "no_rows": "Nenhuma linha para remover.",
+        "footer": "Validação Automática Multi-Project 2026"
+    },
+    "EN": {
+        "title": "🚀 Auto Validation",
+        "subtitle": "Platform for SIAC, AL, and OLX data validation.",
+        "sidebar_config": "⚙️ Settings",
+        "lang_sel": "Language Selection",
+        "sheet_urls": "🔗 Google Sheets URLs",
+        "siac_tab": "🐾 SIAC (Dogs/Cats)",
+        "rnal_tab": "🏠 RNAL (AL)",
+        "olx_tab": "🚗 OLX (Car Mileage)",
+        "btn_start": "🚀 Start Validation",
+        "btn_clear_reg": "🧹 Clear Registered (Both ✅)",
+        "btn_clear_mod": "🧹 Clear Moderated/Inactive",
+        "btn_clear_loc": "🧹 Clear Correct Location",
+        "status_working": "🔍 [{}/{}] Working on: {}",
+        "status_done": "Completed!",
+        "err_no_url": "Please enter the URL.",
+        "err_no_sheet": "ERROR: Sheet '{}' not found in the file!",
+        "dica_siac": "🔦 **TIP:** This tab validates microchips on the SIAC platform. Reads columns G and H, saves to I and J.",
+        "dica_rnal": "🏠 **TIP:** Compares OLX ad location with RNAL registry. Reads cols A and D, saves to C, E, and F.",
+        "dica_olx": "🚗 **TIP:** Validates car mileage on OLX. Compares Col C with the ad (Col A). Saves to E.",
+        "restarting_browser": "♻️ Restarting browser for stability...",
+        "val_waiting": "⚠️ No result - Confirm on RNET ⚠️",
+        "val_correct": "✅ Correct Location ✅",
+        "val_wrong": "❌ Wrong Location ❌",
+        "km_wrong": "✅ Incorrect Km",
+        "km_fixed": "❌ Corrected Km",
+        "cleaning": "Cleaning rows (Syncing with sheet)...",
+        "rows_removed": "Removed {} rows!",
+        "no_rows": "No rows to remove.",
+        "footer": "Multi-Project Auto Validation 2026"
+    }
+}
+
+if "lang" not in st.session_state: st.session_state.lang = "PT"
+
+def t(key, *args):
+    text = TRANSLATIONS[st.session_state.lang].get(key, key)
+    if args: return text.format(*args)
+    return text
+
 st.set_page_config(page_title="Validação Automática", page_icon="🚀", layout="wide")
+
+# --- SIDEBAR ---
+with st.sidebar:
+    st.header(t("sidebar_config"))
+    st.session_state.lang = st.radio(t("lang_sel"), ["PT", "EN"], index=0 if st.session_state.lang == "PT" else 1)
+    
+    st.divider()
+    st.subheader(t("sheet_urls"))
+    saved_links = load_links()
+
+    # SIAC URL
+    current_siac = saved_links.get("siac") or GLOBAL_DEFAULT_URL
+    url_siac = st.text_input("URL Google Sheet (SIAC)", value=current_siac)
+    if url_siac != saved_links.get("siac", ""): save_link("siac", url_siac)
+
+    # RNAL URL
+    current_rnt = saved_links.get("rnt") or GLOBAL_DEFAULT_URL
+    url_rnt = st.text_input("URL Google Sheet (RNT)", value=current_rnt)
+    if url_rnt != saved_links.get("rnt", ""): save_link("rnt", url_rnt)
+
+    # OLX URL
+    current_olx = saved_links.get("olx") or GLOBAL_DEFAULT_URL
+    url_olx = st.text_input("URL Google Sheet (OLX)", value=current_olx)
+    if url_olx != saved_links.get("olx", ""): save_link("olx", url_olx)
 
 # --- SERVICES ---
 
@@ -361,14 +460,17 @@ async def process_list_incremental(
         await init_browser()
         total = len(items)
         for i, val in enumerate(items):
-            # Only skip if we have a conclusive result (✅, ❌, 🚩). Skip 'N/A' or '...' or errors.
-            has_result = isinstance(results[i], str) and any(icon in results[i] for icon in ["✅", "❌", "🚩"])
-            if i < len(results) and results[i] != "..." and has_result:
+            # Skip if we have a result. Placeholder "..." or empty string doesn't count.
+            has_result = isinstance(results[i], str) and results[i].strip() not in ["", "..."]
+            if i < len(results) and has_result:
                 progress_bar.progress((i + 1) / total)
                 continue
 
             if i > 0 and i % refresh_every == 0:
-                status_text.text(f"♻️ Reiniciando navegador...")
+                status_text.text(t("restarting_browser"))
+                if page: await page.close()
+                if context: await context.close()
+                if browser: await browser.close()
                 await init_browser()
 
             # Improved Cleaning: Handle tuples/lists vs single values
@@ -384,7 +486,7 @@ async def process_list_incremental(
             check_val = val[0] if isinstance(val, (tuple, list)) else val
             if not str(check_val).strip() or str(check_val).lower() == "nan": res = "N/A"
             else:
-                status_text.text(f"🔍 [{i+1}/{total}] A Trabalhar: {status_display}")
+                status_text.text(t("status_working", i+1, total, status_display))
                 res = await checker_func(page, cleaned, **extra_params)
             
             results[i] = res
@@ -396,26 +498,18 @@ async def process_list_incremental(
     return results
 
 # --- UI LOGIC ---
+st.title(t("title"))
+st.markdown(t("subtitle"))
 
-st.title("🚀 Validação Automática")
-st.markdown("Plataforma para validação de dados SIAC, AL e OLX.")
-
-tab_siac, tab_rnt, tab_olx = st.tabs(["🐾 SIAC (Cães/Gatos)", "🏠 RNAL (AL)", "🚗 OLX (Km Carros)"])
+tab_siac, tab_rnt, tab_olx = st.tabs([t("siac_tab"), t("rnal_tab"), t("olx_tab")])
 
 # --- TAB: SIAC ---
 with tab_siac:
-    st.subheader("Validação SIAC")
-    st.info("🔦 **DICA:** Esta tab valida microchips na plataforma SIAC. Lê os números das colunas G (Fêmea) e H (Cria) e grava o resultado nas colunas I e J.")
-    
-    saved_links = load_links()
-    # Use GLOBAL_DEFAULT_URL if no saved link exists
-    current_default = saved_links.get("siac") or GLOBAL_DEFAULT_URL
-    url_siac = st.text_input("URL Google Sheet (SIAC)", value=current_default, key="url_siac")
-    if url_siac != saved_links.get("siac", ""):
-        save_link("siac", url_siac)
+    st.subheader(t("siac_tab"))
+    st.info(t("dica_siac"))
 
-    if st.button("🚀 Iniciar Validação SIAC", key="btn_run_siac"):
-        if not url_siac: st.warning("Insira o URL.")
+    if st.button(t("btn_start"), key="btn_run_siac"):
+        if not url_siac: st.warning(t("err_no_url"))
         else:
             gc = get_gspread_client()
             if gc:
@@ -427,11 +521,22 @@ with tab_siac:
                         st.stop()
                     femeas = ws.col_values(7)[1:] # G
                     crias = ws.col_values(8)[1:]  # H
+                    res_femeas = ws.col_values(9)[1:] # I
+                    res_crias = ws.col_values(10)[1:] # J
+                    
                     rows = max(len(femeas), len(crias))
                     interleaved = []
+                    existing_results = []
+                    
                     for i in range(rows):
-                        if i < len(femeas): interleaved.append(femeas[i])
-                        if i < len(crias): interleaved.append(crias[i])
+                        # Femea
+                        if i < len(femeas): 
+                            interleaved.append(femeas[i])
+                            existing_results.append(res_femeas[i] if i < len(res_femeas) else "...")
+                        # Cria
+                        if i < len(crias): 
+                            interleaved.append(crias[i])
+                            existing_results.append(res_crias[i] if i < len(res_crias) else "...")
                     
                     async def update_siac_gs(res):
                         ptr, sf, sc = 0, [], []
@@ -448,21 +553,21 @@ with tab_siac:
                                 ws_i.update(range_name=f"I2:I{1+len(sf)}", values=sf)
                                 ws_i.update(range_name=f"J2:J{1+len(sc)}", values=sc)
 
-                    with st.spinner("A validar o SIAC..."):
-                        asyncio.run(process_list_incremental(interleaved, check_siac_on_page, init_url=SIAC_URL, callback=update_siac_gs))
-                    st.success("Concluído!")
+                    with st.spinner(t("status_working", "?", "?", "SIAC")):
+                        asyncio.run(process_list_incremental(interleaved, check_siac_on_page, init_url=SIAC_URL, callback=update_siac_gs, existing_results=existing_results))
+                    st.success(t("status_done"))
                 except Exception as e: st.error(f"Erro: {e}")
 
     # --- BUTTON: CLEAR SIAC ---
-    if st.button("🧹 Limpar Registados (Ambos ✅)", key="btns_clear_siac"):
-        if not url_siac: st.warning("Insira o URL.")
+    if st.button(t("btn_clear_reg"), key="btns_clear_siac"):
+        if not url_siac: st.warning(t("err_no_url"))
         else:
             try:
                 gc = get_gspread_client()
                 if gc:
                     sh = gc.open_by_url(url_siac)
                     ws = get_worksheet_by_name(sh, "AUTO SIAC")
-                    with st.spinner("Limpando linhas (Sincronizando com a folha)..."):
+                    with st.spinner(t("cleaning")):
                         data = ws.get_all_values()
                         def is_siac_done(row):
                             if len(row) < 10: return False
@@ -470,23 +575,17 @@ with tab_siac:
                             return row[8].strip() == "✅ REGISTADO" and row[9].strip() == "✅ REGISTADO"
                         
                         count = batch_clear_rows(ws, data, is_siac_done)
-                        if count > 0: st.success(f"Removidas {count} linhas!")
-                        else: st.info("Nenhuma linha para remover.")
+                        if count > 0: st.success(t("rows_removed", count))
+                        else: st.info(t("no_rows"))
             except Exception as e: st.error(f"Erro ao limpar: {e}")
 
 # --- TAB: RNT ---
 with tab_rnt:
-    st.subheader("Validação RNAL")
-    st.info("🏠 **DICA:** Compara a localização do anúncio OLX com o registo RNAL. Lê o ID OLX na coluna A e o ID RNAL na coluna D. Devolve a localização do OLX na coluna C e o resultado na coluna F.")
+    st.subheader(t("rnal_tab"))
+    st.info(t("dica_rnal"))
     
-    saved_links = load_links()
-    current_default = saved_links.get("rnt") or GLOBAL_DEFAULT_URL
-    url_rnt = st.text_input("URL Google Sheet (RNT)", value=current_default, key="url_rnt")
-    if url_rnt != saved_links.get("rnt", ""):
-        save_link("rnt", url_rnt)
-    
-    if st.button("🚀 Iniciar Validação RNAL", key="btn_run_rnt"):
-        if not url_rnt: st.warning("Insira o URL.")
+    if st.button(t("btn_start"), key="btn_run_rnt"):
+        if not url_rnt: st.warning(t("err_no_url"))
         else:
             gc = get_gspread_client()
             if gc:
@@ -498,6 +597,13 @@ with tab_rnt:
                         st.stop()
                     olx_ids = ws.col_values(1)[1:] # A
                     rnal_ids = ws.col_values(4)[1:] # D
+                    existing_val = ws.col_values(6)[1:] # F
+                    
+                    # Pad lists
+                    max_len = max(len(olx_ids), len(rnal_ids))
+                    olx_ids += [""] * (max_len - len(olx_ids))
+                    rnal_ids += [""] * (max_len - len(rnal_ids))
+                    existing_val += ["..."] * (max_len - len(existing_val))
                     
                     async def update_al_gs(results):
                         # results is a list of (olx_loc, rnal_loc)
@@ -510,14 +616,17 @@ with tab_rnt:
                                 rnal_formatted = [[r[1]] for r in results]
                                 val_formatted = []
                                 for r in results:
+                                    if isinstance(r, str):
+                                        val_formatted.append([r])
+                                        continue
                                     olx_l, rnt_l = str(r[0]).lower(), str(r[1]).lower()
                                     if rnt_l == "n/a" or not rnt_l or "sem dados" in rnt_l:
-                                        val_formatted.append(["⚠️ Sem resultado - Confirmar no RNET ⚠️"])
+                                        val_formatted.append([t("val_waiting")])
                                     elif any(s in str(r[0]) or s in str(r[1]) for s in ["...", "⚠️", "❓"]):
                                         val_formatted.append(["..."])
                                     elif olx_l != "n/a" and any(word in rnt_l for word in olx_l.split() if len(word) > 3): 
-                                        val_formatted.append(["✅Localização Correcta ✅"])
-                                    else: val_formatted.append(["❌ Localização Errada ❌"])
+                                        val_formatted.append([t("val_correct")])
+                                    else: val_formatted.append([t("val_wrong")])
                                     
                                 ws_u.update(range_name=f"C2:C{1+len(olx_formatted)}", values=olx_formatted) # OLX Loc
                                 ws_u.update(range_name=f"E2:E{1+len(rnal_formatted)}", values=rnal_formatted) # RNAL Data
@@ -529,26 +638,40 @@ with tab_rnt:
                         rnt_data = await check_rnt_rnal_only(page, r_id)
                         return (olx_loc, rnt_data)
 
-                    with st.spinner("A Validar o AL (OLX vs RNAL)..."):
+                    with st.spinner(t("status_working", "?", "?", "AL")):
                         combined_ids = list(zip(olx_ids, rnal_ids))
-                        asyncio.run(process_list_incremental(combined_ids, al_checker, callback=update_al_gs))
-                    st.success("Concluído!")
+                        asyncio.run(process_list_incremental(combined_ids, al_checker, callback=update_al_gs, existing_results=existing_val))
+                    st.success(t("status_done"))
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
 
+    # --- BUTTON: CLEAR RNAL ---
+    if st.button(t("btn_clear_loc"), key="btn_clear_rnal"):
+        if not url_rnt: st.warning(t("err_no_url"))
+        else:
+            try:
+                gc = get_gspread_client()
+                if gc:
+                    sh = gc.open_by_url(url_rnt)
+                    ws = get_worksheet_by_name(sh, "AUTO RNAL")
+                    with st.spinner(t("cleaning")):
+                        data = ws.get_all_values()
+                        def is_rnal_done(row):
+                            if len(row) < 6: return False
+                            return row[5].strip() == t("val_correct")
+                        
+                        count = batch_clear_rows(ws, data, is_rnal_done)
+                        if count > 0: st.success(t("rows_removed", count))
+                        else: st.info(t("no_rows"))
+            except Exception as e: st.error(f"Erro ao limpar: {e}")
+
 # --- TAB: OLX ---
 with tab_olx:
-    st.subheader("Validação de Km no OLX")
-    st.info("🚗 **DICA:** Valida os Km de carros no OLX. Compara os Km do sistema na coluna C com os Km encontrados no anúncio (ID na coluna A). O resultado vai para a coluna E.")
+    st.subheader(t("olx_tab"))
+    st.info(t("dica_olx"))
     
-    saved_links = load_links()
-    current_default = saved_links.get("olx") or GLOBAL_DEFAULT_URL
-    url_olx = st.text_input("URL Google Sheet (OLX)", value=current_default, key="url_olx")
-    if url_olx != saved_links.get("olx", ""):
-        save_link("olx", url_olx)
-    
-    if st.button("🚀 Iniciar Validação Km", key="btn_run_olx"):
-        if not url_olx: st.warning("Insira o URL.")
+    if st.button(t("btn_start"), key="btn_run_olx"):
+        if not url_olx: st.warning(t("err_no_url"))
         else:
             gc = get_gspread_client()
             if gc:
@@ -560,10 +683,13 @@ with tab_olx:
                         st.stop()
                     ids = ws.col_values(1)[1:] # Column A
                     system_km = ws.col_values(3)[1:] # Col C (User provided)
+                    existing_val = ws.col_values(5)[1:] # Col E
+                    
                     # Pad lists to ensure same length
                     max_len = max(len(ids), len(system_km))
                     ids += [""] * (max_len - len(ids))
                     system_km += [""] * (max_len - len(system_km))
+                    existing_val += ["..."] * (max_len - len(existing_val))
                     
                     async def update_cars_gs(results):
                         # results is a list of (found_km, validation)
@@ -590,29 +716,29 @@ with tab_olx:
                         if any(msg in found_km_str for msg in ["⚠️ Anúncio já foi moderado ⚠️", "⚠️ Anúncio inactivo ⚠️"]):
                             validation = found_km_str
                         elif found_km_str != "...":
-                            if sys_km and found_km_clean and sys_km in found_km_clean: validation = "✅Km errados"
-                            else: validation = "❌ Km corrigidos"
+                            if sys_km and found_km_clean and sys_km in found_km_clean: validation = t("km_wrong")
+                            else: validation = t("km_fixed")
                         
                         return (found_km_str, validation)
 
-                    with st.spinner("A Validar anúncios do OLX..."):
+                    with st.spinner(t("status_working", "?", "?", "OLX")):
                         # Pass zipped list to show Ad ID in status
                         combined = list(zip(ids, system_km))
-                        asyncio.run(process_list_incremental(combined, cars_checker, callback=update_cars_gs, batch_size=10))
-                    st.success("Concluído!")
+                        asyncio.run(process_list_incremental(combined, cars_checker, callback=update_cars_gs, batch_size=10, existing_results=existing_val))
+                    st.success(t("status_done"))
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
 
     # --- BUTTON: CLEAR OLX ---
-    if st.button("🧹 Limpar Moderados/Inactivos", key="btn_clear_olx"):
-        if not url_olx: st.warning("Insira o URL.")
+    if st.button(t("btn_clear_mod"), key="btn_clear_olx"):
+        if not url_olx: st.warning(t("err_no_url"))
         else:
             try:
                 gc = get_gspread_client()
                 if gc:
                     sh = gc.open_by_url(url_olx)
                     ws = get_worksheet_by_name(sh, "Auto Km")
-                    with st.spinner("Limpando linhas (Sincronizando com a folha)..."):
+                    with st.spinner(t("cleaning")):
                         data = ws.get_all_values()
                         def is_olx_cleanup(row):
                             if len(row) < 5: return False
@@ -620,9 +746,9 @@ with tab_olx:
                             return any(msg in status for msg in ["⚠️ Anúncio já foi moderado ⚠️", "⚠️ Anúncio inactivo ⚠️"])
                         
                         count = batch_clear_rows(ws, data, is_olx_cleanup)
-                        if count > 0: st.success(f"Removidas {count} linhas!")
-                        else: st.info("Nenhuma linha para remover.")
+                        if count > 0: st.success(t("rows_removed", count))
+                        else: st.info(t("no_rows"))
             except Exception as e: st.error(f"Erro ao limpar: {e}")
 
 st.divider()
-st.caption("Validação Automática Multi-Project 2026")
+st.caption(t("footer"))
