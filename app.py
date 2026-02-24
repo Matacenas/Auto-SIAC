@@ -42,7 +42,7 @@ TRANSLATIONS = {
     "PT": {
         "title": "🚀 Validação Automática",
         "subtitle": "Plataforma para validação de dados SIAC, AL e OLX.",
-        "sidebar_config": "⚙️ Configurações",
+        "sidebar_config": "🌐 Linguagem",
         "lang_sel": "Escolha o Idioma / Language",
         "sheet_urls": "🔗 URLs do Google Sheets",
         "siac_tab": "🐾 SIAC",
@@ -78,7 +78,7 @@ TRANSLATIONS = {
     "EN": {
         "title": "🚀 Auto Validation",
         "subtitle": "Platform for SIAC, AL, and OLX data validation.",
-        "sidebar_config": "⚙️ Settings",
+        "sidebar_config": "🌐 Language",
         "lang_sel": "Language Selection",
         "sheet_urls": "🔗 Google Sheets URLs",
         "siac_tab": "🐾 SIAC",
@@ -140,6 +140,9 @@ st.markdown("""
         padding-right: 20px !important;
     }
     button[data-baseweb="tab"] p { font-size: 24px !important; }
+    
+    /* SHRINK DIVIDERS to match TIP boxes */
+    hr { width: 400px !important; margin-left: 0 !important; border-top: 2px solid #555; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -147,14 +150,16 @@ st.markdown("""
 with st.sidebar:
     st.header(t("sidebar_config"))
     
-    # Language Switcher - Clear Labels for Windows compatibility
+    # Language Switcher - Flag Images (Final attempt for Windows)
     cola, colb = st.columns(2)
     with cola:
-        if st.button("PORTUGUÊS", use_container_width=True, help="Mudar para Português"):
+        st.image("https://flagcdn.com/w80/pt.png", width=80)
+        if st.button(" ", key="btn_pt_final", use_container_width=True):
             st.session_state.lang = "PT"
             st.rerun()
     with colb:
-        if st.button("ENGLISH", use_container_width=True, help="Switch to English"):
+        st.image("https://flagcdn.com/w80/gb.png", width=80)
+        if st.button(" ", key="btn_en_final", use_container_width=True):
             st.session_state.lang = "EN"
             st.rerun()
     
