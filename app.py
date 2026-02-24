@@ -47,7 +47,9 @@ TRANSLATIONS = {
         "sheet_urls": "🔗 URLs do Google Sheets",
         "siac_tab": "🐾 SIAC",
         "siac_sub": "🐾 SIAC - Cães e Gatos",
+        "rnal_tab": "🏠 RNAL",
         "rnal_sub": "🏠 RNAL - Alojamento Local",
+        "olx_tab": "🚗 OLX",
         "olx_sub": "🚗 OLX - Km Carros",
         "gs_url_label": "URL Google Sheet",
         "btn_start": "🚀 Iniciar Validação",
@@ -81,7 +83,9 @@ TRANSLATIONS = {
         "sheet_urls": "🔗 Google Sheets URLs",
         "siac_tab": "🐾 SIAC",
         "siac_sub": "🐾 SIAC - Dogs and Cats",
+        "rnal_tab": "🏠 RNAL",
         "rnal_sub": "🏠 RNAL - Local Accommodation",
+        "olx_tab": "🚗 OLX",
         "olx_sub": "🚗 OLX - Car Mileage",
         "gs_url_label": "Google Sheet URL",
         "btn_start": "🚀 Start Validation",
@@ -122,10 +126,20 @@ st.set_page_config(page_title="Validação Automática", page_icon="🚀", layou
 st.markdown("""
     <style>
     /* Shrink the sidebar a bit */
-    [data-testid="stSidebar"] { min-width: 250px; max-width: 300px; }
+    [data-testid="stSidebar"] { min-width: 280px; max-width: 320px; }
     /* Make Alert/Info boxes shrink to text width and look more professional */
     [data-testid="stNotification"] { width: fit-content !important; min-width: 300px; max-width: 100%; border-radius: 10px; }
     .stAlert { width: fit-content !important; min-width: 300px; max-width: 100%; border-radius: 10px; padding: 10px 20px; }
+    
+    /* ENLARGE TABS */
+    button[data-baseweb="tab"] { 
+        font-size: 24px !important; 
+        height: 60px !important; 
+        font-weight: bold !important;
+        padding-left: 20px !important;
+        padding-right: 20px !important;
+    }
+    button[data-baseweb="tab"] p { font-size: 24px !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -133,14 +147,14 @@ st.markdown("""
 with st.sidebar:
     st.header(t("sidebar_config"))
     
-    # Professional Language Switcher with Flags
+    # Language Switcher - Clear Labels for Windows compatibility
     cola, colb = st.columns(2)
     with cola:
-        if st.button("🇵🇹 PT", use_container_width=True):
+        if st.button("PORTUGUÊS", use_container_width=True, help="Mudar para Português"):
             st.session_state.lang = "PT"
             st.rerun()
     with colb:
-        if st.button("🇬🇧 EN", use_container_width=True):
+        if st.button("ENGLISH", use_container_width=True, help="Switch to English"):
             st.session_state.lang = "EN"
             st.rerun()
     
