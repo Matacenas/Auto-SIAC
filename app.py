@@ -156,28 +156,28 @@ st.markdown("""
 with st.sidebar:
     st.header(t("sidebar_config"))
     
-    # Language Switcher - Vertical with Flag + Text (Pixel Perfect Flexbox Alignment)
+    # Language Switcher - Vertical with Flag + Text (Final Visual Balancing)
     # PT
     colx1, colx2 = st.columns([1, 4])
     with colx1: 
         st.markdown("""
             <div style='display: flex; align-items: center; justify-content: center; height: 38px;'>
-                <img src='https://flagcdn.com/w80/pt.png' style='height: 22px; border-radius: 2px; box-shadow: 0 0 2px rgba(0,0,0,0.5);'>
+                <img src='https://flagcdn.com/w80/pt.png' style='height: 26px; border-radius: 2px; box-shadow: 0 0 2px rgba(0,0,0,0.5);'>
             </div>
         """, unsafe_allow_html=True)
     with colx2:
-        if st.button("Português", key="btn_pt_final_v5", use_container_width=True):
+        if st.button("Português", key="btn_pt_final_v6", use_container_width=True):
             st.session_state.lang = "PT"; st.rerun()
     # EN
     coly1, coly2 = st.columns([1, 4])
     with coly1: 
         st.markdown("""
             <div style='display: flex; align-items: center; justify-content: center; height: 38px;'>
-                <img src='https://flagcdn.com/w80/gb.png' style='height: 22px; border-radius: 2px; box-shadow: 0 0 2px rgba(0,0,0,0.5);'>
+                <img src='https://flagcdn.com/w80/gb.png' style='height: 26px; border-radius: 2px; box-shadow: 0 0 2px rgba(0,0,0,0.5);'>
             </div>
         """, unsafe_allow_html=True)
     with coly2:
-        if st.button("English", key="btn_en_final_v5", use_container_width=True):
+        if st.button("English", key="btn_en_final_v6", use_container_width=True):
             st.session_state.lang = "EN"; st.rerun()
     
     st.divider()
