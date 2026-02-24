@@ -45,10 +45,11 @@ TRANSLATIONS = {
         "sidebar_config": "⚙️ Configurações",
         "lang_sel": "Escolha o Idioma / Language",
         "sheet_urls": "🔗 URLs do Google Sheets",
-        "siac_tab": "🐾 SIAC (Cães/Gatos)",
-        "rnal_tab": "🏠 RNAL (AL)",
-        "olx_tab": "🚗 OLX (Km Carros)",
+        "siac_tab": "🐾 SIAC",
+        "rnal_tab": "🏠 RNAL",
+        "olx_tab": "🚗 OLX",
         "btn_start": "🚀 Iniciar Validação",
+        "btn_open_sheet": "📖 Abrir Folha",
         "btn_clear_reg": "🧹 Limpar Registados (Ambos ✅)",
         "btn_clear_mod": "🧹 Limpar Moderados/Inactivos",
         "btn_clear_loc": "🧹 Limpar Localização Correcta",
@@ -56,9 +57,9 @@ TRANSLATIONS = {
         "status_done": "Concluído!",
         "err_no_url": "Insira o URL.",
         "err_no_sheet": "ERRO: Aba '{}' não encontrada no ficheiro!",
-        "dica_siac": "🔦 **DICA:** Esta tab valida microchips na plataforma SIAC. Lê os números das colunas G e H e grava em I e J.",
-        "dica_rnal": "🏠 **DICA:** Compara a localização do anúncio OLX com o registo RNAL. Lê colunas A e D, grava em C, E e F.",
-        "dica_olx": "🚗 **DICA:** Valida os Km de carros no OLX. Compara Col C com o anúncio (Col A). Grava em E.",
+        "dica_siac": "💡 **DICA:** Esta tab valida microchips no SIAC. Lê G e H, grava em I e J.",
+        "dica_rnal": "💡 **DICA:** Compara localização OLX com RNAL. Lê A e D, grava em C, E e F.",
+        "dica_olx": "💡 **DICA:** Valida Km no OLX. Compara C com o anúncio (A). Grava em E.",
         "restarting_browser": "♻️ Reiniciando navegador para estabilidade...",
         "val_waiting": "⚠️ Sem resultado - Confirmar no RNET ⚠️",
         "val_correct": "✅Localização Correcta ✅",
@@ -76,10 +77,11 @@ TRANSLATIONS = {
         "sidebar_config": "⚙️ Settings",
         "lang_sel": "Language Selection",
         "sheet_urls": "🔗 Google Sheets URLs",
-        "siac_tab": "🐾 SIAC (Dogs/Cats)",
-        "rnal_tab": "🏠 RNAL (AL)",
-        "olx_tab": "🚗 OLX (Car Mileage)",
+        "siac_tab": "🐾 SIAC",
+        "rnal_tab": "🏠 RNAL",
+        "olx_tab": "🚗 OLX",
         "btn_start": "🚀 Start Validation",
+        "btn_open_sheet": "📖 Open Sheet",
         "btn_clear_reg": "🧹 Clear Registered (Both ✅)",
         "btn_clear_mod": "🧹 Clear Moderated/Inactive",
         "btn_clear_loc": "🧹 Clear Correct Location",
@@ -87,9 +89,9 @@ TRANSLATIONS = {
         "status_done": "Completed!",
         "err_no_url": "Please enter the URL.",
         "err_no_sheet": "ERROR: Sheet '{}' not found in the file!",
-        "dica_siac": "🔦 **TIP:** This tab validates microchips on the SIAC platform. Reads columns G and H, saves to I and J.",
-        "dica_rnal": "🏠 **TIP:** Compares OLX ad location with RNAL registry. Reads cols A and D, saves to C, E, and F.",
-        "dica_olx": "🚗 **TIP:** Validates car mileage on OLX. Compares Col C with the ad (Col A). Saves to E.",
+        "dica_siac": "💡 **TIP:** This tab validates microchips on SIAC. Reads G and H, saves to I and J.",
+        "dica_rnal": "💡 **TIP:** Compares OLX ad location with RNAL. Reads A and D, saves to C, E, and F.",
+        "dica_olx": "💡 **TIP:** Validates car mileage on OLX. Compares C with ad (A). Saves to E.",
         "restarting_browser": "♻️ Restarting browser for stability...",
         "val_waiting": "⚠️ No result - Confirm on RNET ⚠️",
         "val_correct": "✅ Correct Location ✅",
@@ -112,29 +114,33 @@ def t(key, *args):
 
 st.set_page_config(page_title="Validação Automática", page_icon="🚀", layout="wide")
 
+# --- CUSTOM CSS ---
+st.markdown("""
+    <style>
+    /* Shrink the sidebar a bit */
+    [data-testid="stSidebar"] { min-width: 250px; max-width: 300px; }
+    /* Make Alert/Info boxes shrink to text width */
+    .stAlert { width: fit-content !important; min-width: 200px; max-width: 100%; }
+    </style>
+    """, unsafe_allow_html=True)
+
 # --- SIDEBAR ---
 with st.sidebar:
     st.header(t("sidebar_config"))
-    st.session_state.lang = st.radio(t("lang_sel"), ["PT", "EN"], index=0 if st.session_state.lang == "PT" else 1)
+    choice = st.radio(t("lang_sel"), ["🇵🇹 PT", "🇬🇧 EN"], index=0 if st.session_state.lang == "PT" else 1)
+    st.session_state.lang = "PT" if "PT" in choice else "EN"
     
     st.divider()
     st.subheader(t("sheet_urls"))
     saved_links = load_links()
 
-    # SIAC URL
-    current_siac = saved_links.get("siac") or GLOBAL_DEFAULT_URL
-    url_siac = st.text_input("URL Google Sheet (SIAC)", value=current_siac)
-    if url_siac != saved_links.get("siac", ""): save_link("siac", url_siac)
-
-    # RNAL URL
-    current_rnt = saved_links.get("rnt") or GLOBAL_DEFAULT_URL
-    url_rnt = st.text_input("URL Google Sheet (RNT)", value=current_rnt)
-    if url_rnt != saved_links.get("rnt", ""): save_link("rnt", url_rnt)
-
-    # OLX URL
-    current_olx = saved_links.get("olx") or GLOBAL_DEFAULT_URL
-    url_olx = st.text_input("URL Google Sheet (OLX)", value=current_olx)
-    if url_olx != saved_links.get("olx", ""): save_link("olx", url_olx)
+    # Consolidated URL
+    current_gs = saved_links.get("gs_url") or GLOBAL_DEFAULT_URL
+    url_gs = st.text_input("URL Google Sheet", value=current_gs)
+    if url_gs != saved_links.get("gs_url", ""): save_link("gs_url", url_gs)
+    
+    if url_gs:
+        st.link_button(t("btn_open_sheet"), url_gs, use_container_width=True)
 
 # --- SERVICES ---
 
@@ -509,12 +515,12 @@ with tab_siac:
     st.info(t("dica_siac"))
 
     if st.button(t("btn_start"), key="btn_run_siac"):
-        if not url_siac: st.warning(t("err_no_url"))
+        if not url_gs: st.warning(t("err_no_url"))
         else:
             gc = get_gspread_client()
             if gc:
                 try:
-                    sh = gc.open_by_url(url_siac)
+                    sh = gc.open_by_url(url_gs)
                     ws = get_worksheet_by_name(sh, "AUTO SIAC")
                     if not ws:
                         st.error("ERRO: Aba 'AUTO SIAC' não encontrada no ficheiro!")
@@ -547,7 +553,7 @@ with tab_siac:
                             else: sc.append(["N/A"])
                         gc_i = get_gspread_client()
                         if gc_i:
-                            sh_i = gc_i.open_by_url(url_siac)
+                            sh_i = gc_i.open_by_url(url_gs)
                             ws_i = get_worksheet_by_name(sh_i, "AUTO SIAC")
                             if ws_i:
                                 ws_i.update(range_name=f"I2:I{1+len(sf)}", values=sf)
@@ -560,12 +566,12 @@ with tab_siac:
 
     # --- BUTTON: CLEAR SIAC ---
     if st.button(t("btn_clear_reg"), key="btns_clear_siac"):
-        if not url_siac: st.warning(t("err_no_url"))
+        if not url_gs: st.warning(t("err_no_url"))
         else:
             try:
                 gc = get_gspread_client()
                 if gc:
-                    sh = gc.open_by_url(url_siac)
+                    sh = gc.open_by_url(url_gs)
                     ws = get_worksheet_by_name(sh, "AUTO SIAC")
                     with st.spinner(t("cleaning")):
                         data = ws.get_all_values()
@@ -585,12 +591,12 @@ with tab_rnt:
     st.info(t("dica_rnal"))
     
     if st.button(t("btn_start"), key="btn_run_rnt"):
-        if not url_rnt: st.warning(t("err_no_url"))
+        if not url_gs: st.warning(t("err_no_url"))
         else:
             gc = get_gspread_client()
             if gc:
                 try:
-                    sh = gc.open_by_url(url_rnt)
+                    sh = gc.open_by_url(url_gs)
                     ws = get_worksheet_by_name(sh, "AUTO RNAL")
                     if not ws:
                         st.error("ERRO: Aba 'AUTO RNAL' não encontrada no ficheiro!")
@@ -609,7 +615,7 @@ with tab_rnt:
                         # results is a list of (olx_loc, rnal_loc)
                         gc_u = get_gspread_client()
                         if gc_u:
-                            sh_u = gc_u.open_by_url(url_rnt)
+                            sh_u = gc_u.open_by_url(url_gs)
                             ws_u = get_worksheet_by_name(sh_u, "AUTO RNAL")
                             if ws_u:
                                 olx_formatted = [[r[0]] for r in results]
@@ -647,12 +653,12 @@ with tab_rnt:
 
     # --- BUTTON: CLEAR RNAL ---
     if st.button(t("btn_clear_loc"), key="btn_clear_rnal"):
-        if not url_rnt: st.warning(t("err_no_url"))
+        if not url_gs: st.warning(t("err_no_url"))
         else:
             try:
                 gc = get_gspread_client()
                 if gc:
-                    sh = gc.open_by_url(url_rnt)
+                    sh = gc.open_by_url(url_gs)
                     ws = get_worksheet_by_name(sh, "AUTO RNAL")
                     with st.spinner(t("cleaning")):
                         data = ws.get_all_values()
@@ -671,12 +677,12 @@ with tab_olx:
     st.info(t("dica_olx"))
     
     if st.button(t("btn_start"), key="btn_run_olx"):
-        if not url_olx: st.warning(t("err_no_url"))
+        if not url_gs: st.warning(t("err_no_url"))
         else:
             gc = get_gspread_client()
             if gc:
                 try:
-                    sh = gc.open_by_url(url_olx)
+                    sh = gc.open_by_url(url_gs)
                     ws = get_worksheet_by_name(sh, "Auto Km")
                     if not ws:
                         st.error("ERRO: Aba 'Auto Km' não encontrada no ficheiro!")
@@ -695,7 +701,7 @@ with tab_olx:
                         # results is a list of (found_km, validation)
                         gc_u = get_gspread_client()
                         if gc_u:
-                            sh_u = gc_u.open_by_url(url_olx)
+                            sh_u = gc_u.open_by_url(url_gs)
                             ws_u = get_worksheet_by_name(sh_u, "Auto Km")
                             if ws_u:
                                 bot_km_fmt = [[r[0]] for r in results]
@@ -731,12 +737,12 @@ with tab_olx:
 
     # --- BUTTON: CLEAR OLX ---
     if st.button(t("btn_clear_mod"), key="btn_clear_olx"):
-        if not url_olx: st.warning(t("err_no_url"))
+        if not url_gs: st.warning(t("err_no_url"))
         else:
             try:
                 gc = get_gspread_client()
                 if gc:
-                    sh = gc.open_by_url(url_olx)
+                    sh = gc.open_by_url(url_gs)
                     ws = get_worksheet_by_name(sh, "Auto Km")
                     with st.spinner(t("cleaning")):
                         data = ws.get_all_values()
