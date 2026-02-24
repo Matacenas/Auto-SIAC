@@ -46,8 +46,11 @@ TRANSLATIONS = {
         "lang_sel": "Escolha o Idioma / Language",
         "sheet_urls": "🔗 URLs do Google Sheets",
         "siac_tab": "🐾 SIAC",
+        "siac_sub": "🐾 SIAC - Cães e Gatos",
         "rnal_tab": "🏠 RNAL",
+        "rnal_sub": "🏠 RNAL - Alojamento Local",
         "olx_tab": "🚗 OLX",
+        "olx_sub": "🚗 OLX - Km Carros",
         "btn_start": "🚀 Iniciar Validação",
         "btn_open_sheet": "📖 Abrir Folha",
         "btn_clear_reg": "🧹 Limpar Registados (Ambos ✅)",
@@ -78,8 +81,11 @@ TRANSLATIONS = {
         "lang_sel": "Language Selection",
         "sheet_urls": "🔗 Google Sheets URLs",
         "siac_tab": "🐾 SIAC",
+        "siac_sub": "🐾 SIAC - Dogs and Cats",
         "rnal_tab": "🏠 RNAL",
+        "rnal_sub": "🏠 RNAL - Local Accommodation",
         "olx_tab": "🚗 OLX",
+        "olx_sub": "🚗 OLX - Car Mileage",
         "btn_start": "🚀 Start Validation",
         "btn_open_sheet": "📖 Open Sheet",
         "btn_clear_reg": "🧹 Clear Registered (Both ✅)",
@@ -127,11 +133,12 @@ st.markdown("""
 # --- SIDEBAR ---
 with st.sidebar:
     st.header(t("sidebar_config"))
-    choice = st.radio(t("lang_sel"), ["🇵🇹 PT", "🇬🇧 EN"], index=0 if st.session_state.lang == "PT" else 1)
+    # Improved labels for Windows (using text indicators since flags often fail)
+    lang_opts = ["🇵🇹 PT - Português", "🇬🇧 EN - English"]
+    choice = st.radio(t("lang_sel"), lang_opts, index=0 if st.session_state.lang == "PT" else 1)
     st.session_state.lang = "PT" if "PT" in choice else "EN"
     
     st.divider()
-    st.subheader(t("sheet_urls"))
     saved_links = load_links()
 
     # Consolidated URL
@@ -511,7 +518,7 @@ tab_siac, tab_rnt, tab_olx = st.tabs([t("siac_tab"), t("rnal_tab"), t("olx_tab")
 
 # --- TAB: SIAC ---
 with tab_siac:
-    st.subheader(t("siac_tab"))
+    st.subheader(t("siac_sub"))
     st.info(t("dica_siac"))
 
     if st.button(t("btn_start"), key="btn_run_siac"):
@@ -587,7 +594,7 @@ with tab_siac:
 
 # --- TAB: RNT ---
 with tab_rnt:
-    st.subheader(t("rnal_tab"))
+    st.subheader(t("rnal_sub"))
     st.info(t("dica_rnal"))
     
     if st.button(t("btn_start"), key="btn_run_rnt"):
@@ -673,7 +680,7 @@ with tab_rnt:
 
 # --- TAB: OLX ---
 with tab_olx:
-    st.subheader(t("olx_tab"))
+    st.subheader(t("olx_sub"))
     st.info(t("dica_olx"))
     
     if st.button(t("btn_start"), key="btn_run_olx"):
