@@ -71,6 +71,8 @@ TRANSLATIONS = {
         "km_wrong": "❌ KM errados ❌",
         "km_fixed": "✅ KM corrigidos pelo user ✅",
         "km_missing_param": "Parâmetro não preenchido",
+        "km_moderated": "⚠️ Anúncio já foi moderado ⚠️",
+        "km_inactive": "⚠️ Anúncio inactivo ⚠️",
         "cleaning": "Limpando linhas (Sincronizando com a folha)...",
         "rows_removed": "Removidas {} linhas!",
         "no_rows": "Nenhuma linha para remover.",
@@ -108,6 +110,8 @@ TRANSLATIONS = {
         "km_wrong": "❌ Incorrect mileage ❌",
         "km_fixed": "✅ Mileage corrected by user ✅",
         "km_missing_param": "Parameter not filled",
+        "km_moderated": "⚠️ Ad Already Moderated ⚠️",
+        "km_inactive": "⚠️ Ad Inactive ⚠️",
         "cleaning": "Cleaning rows (Syncing with sheet)...",
         "rows_removed": "Removed {} rows!",
         "no_rows": "No rows to remove.",
@@ -776,8 +780,11 @@ with tab_olx:
                         else:
                             sys_km_clean = ""
 
-                        if any(msg in found_km_str for msg in ["⚠️ Anúncio já foi moderado ⚠️", "⚠️ Anúncio inactivo ⚠️"]):
-                            validation = found_km_str
+                        if any(msg in found_km_str for msg in ["⚠️ Anúncio já foi moderado ⚠️", "⚠️ Anúncio inactivo ⚠️", "already moderated", "inactive"]):
+                            if "moderado" in found_km_str or "moderated" in found_km_str.lower():
+                                validation = t("km_moderated")
+                            else:
+                                validation = t("km_inactive")
                         elif "Km não encontrado" in found_km_str:
                             validation = t("km_missing_param")
                         if found_km_str != "...":
@@ -824,6 +831,8 @@ with tab_olx:
                             return any(msg in status for msg in [
                                 "⚠️ Anúncio já foi moderado ⚠️", 
                                 "⚠️ Anúncio inactivo ⚠️",
+                                "⚠️ Ad Already Moderated ⚠️",
+                                "⚠️ Ad Inactive ⚠️",
                                 "✅ KM corrigidos pelo user ✅",
                                 "✅ Mileage corrected by user ✅"
                             ])
