@@ -68,8 +68,8 @@ TRANSLATIONS = {
         "val_waiting": "⚠️ Sem resultado - Confirmar no RNET ⚠️",
         "val_correct": "✅Localização Correcta ✅",
         "val_wrong": "❌ Localização Errada ❌",
-        "km_wrong": "✅Km errados",
-        "km_fixed": "❌ Km corrigidos",
+        "km_wrong": "❌ KM errados ❌",
+        "km_fixed": "✅ KM corrigidos pelo user ✅",
         "km_missing_param": "Parâmetro não preenchido",
         "cleaning": "Limpando linhas (Sincronizando com a folha)...",
         "rows_removed": "Removidas {} linhas!",
@@ -105,8 +105,8 @@ TRANSLATIONS = {
         "val_waiting": "⚠️ No result - Confirm on RNET ⚠️",
         "val_correct": "✅ Correct Location ✅",
         "val_wrong": "❌ Wrong Location ❌",
-        "km_wrong": "✅ Incorrect Km",
-        "km_fixed": "❌ Corrected Km",
+        "km_wrong": "❌ Incorrect mileage ❌",
+        "km_fixed": "✅ Mileage corrected by user ✅",
         "km_missing_param": "Parameter not filled",
         "cleaning": "Cleaning rows (Syncing with sheet)...",
         "rows_removed": "Removed {} rows!",
@@ -821,7 +821,12 @@ with tab_olx:
                         def is_olx_cleanup(row):
                             if len(row) < 5: return False
                             status = row[4].strip() # Col E
-                            return any(msg in status for msg in ["⚠️ Anúncio já foi moderado ⚠️", "⚠️ Anúncio inactivo ⚠️"])
+                            return any(msg in status for msg in [
+                                "⚠️ Anúncio já foi moderado ⚠️", 
+                                "⚠️ Anúncio inactivo ⚠️",
+                                "✅ KM corrigidos pelo user ✅",
+                                "✅ Mileage corrected by user ✅"
+                            ])
                         
                         count = batch_clear_rows(ws, data, is_olx_cleanup)
                         if count > 0: st.success(t("rows_removed", count))
