@@ -42,7 +42,7 @@ TRANSLATIONS = {
     "PT": {
         "title": "🚀 Validação Automática",
         "subtitle": "Plataforma para validação de dados SIAC, AL e OLX.",
-        "sidebar_config": "🌐 Linguagem",
+        "sidebar_config": "🌐 Linguagem / Language",
         "lang_sel": "Escolha o Idioma / Language",
         "sheet_urls": "🔗 URLs do Google Sheets",
         "siac_tab": "🐾 SIAC",
@@ -57,19 +57,20 @@ TRANSLATIONS = {
         "btn_clear_reg": "🧹 Limpar Registados (Ambos ✅)",
         "btn_clear_mod": "🧹 Limpar Moderados/Inactivos",
         "btn_clear_loc": "🧹 Limpar Localização Correcta",
-        "status_working": "🔍 [{}/{}] A Trabalhar: {}",
+        "status_working": "🔍 A Trabalhar: {}",
         "status_done": "Concluído!",
         "err_no_url": "Insira o URL.",
         "err_no_sheet": "ERRO: Aba '{}' não encontrada no ficheiro!",
-        "dica_siac": "💡 **DICA:** Esta tab valida microchips no SIAC. Lê G e H, grava em I e J.",
-        "dica_rnal": "💡 **DICA:** Compara localização OLX com RNAL. Lê A e D, grava em C, E e F.",
-        "dica_olx": "💡 **DICA:** Valida Km no OLX. Compara C com o anúncio (A). Grava em E.",
+        "dica_siac": "💡 **Processo de Validação:**\n1- Lê os dados das Colunas G e H.\n2- Realiza a validação automática do microchip no site do SIAC.pt.\n3- Regista o resultado da validação nas Colunas I e J.",
+        "dica_rnal": "💡 **Processo de Validação:**\n1- Lê o ID do anúncio na Coluna A.\n2- Faz scraping da localização do anúncio em olx.pt e regista o resultado na Coluna C.\n3- Lê o Número de Alojamento Local da Coluna D e valida no site do RNAL: https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr=AdID\n4- Faz scraping do resultado da validação e regista a informação na Coluna E.\n5- Compara a localização do OLX com a do RNAL e regista a sugestão na Coluna F.",
+        "dica_olx": "💡 **Processo de Validação:**\n1- Lê o ID do anúncio na Coluna A.\n2- Acede a olx.pt e faz scraping dos quilómetros apresentados no anúncio (LIVE).\n3- Regista os quilómetros obtidos na Coluna D.\n4- Compara os valores da Coluna C com os da Coluna D.\n5- Regista o resultado da validação na Coluna E.",
         "restarting_browser": "♻️ Reiniciando navegador para estabilidade...",
         "val_waiting": "⚠️ Sem resultado - Confirmar no RNET ⚠️",
         "val_correct": "✅Localização Correcta ✅",
         "val_wrong": "❌ Localização Errada ❌",
         "km_wrong": "✅Km errados",
         "km_fixed": "❌ Km corrigidos",
+        "km_missing_param": "Parâmetro não preenchido",
         "cleaning": "Limpando linhas (Sincronizando com a folha)...",
         "rows_removed": "Removidas {} linhas!",
         "no_rows": "Nenhuma linha para remover.",
@@ -78,7 +79,7 @@ TRANSLATIONS = {
     "EN": {
         "title": "🚀 Auto Validation",
         "subtitle": "Platform for SIAC, AL, and OLX data validation.",
-        "sidebar_config": "🌐 Language",
+        "sidebar_config": "🌐 Linguagem / Language",
         "lang_sel": "Language Selection",
         "sheet_urls": "🔗 Google Sheets URLs",
         "siac_tab": "🐾 SIAC",
@@ -93,19 +94,20 @@ TRANSLATIONS = {
         "btn_clear_reg": "🧹 Clear Registered (Both ✅)",
         "btn_clear_mod": "🧹 Clear Moderated/Inactive",
         "btn_clear_loc": "🧹 Clear Correct Location",
-        "status_working": "🔍 [{}/{}] Working on: {}",
+        "status_working": "🔍 Working on: {}",
         "status_done": "Completed!",
         "err_no_url": "Please enter the URL.",
         "err_no_sheet": "ERROR: Sheet '{}' not found in the file!",
-        "dica_siac": "💡 **TIP:** This tab validates microchips on SIAC. Reads G and H, saves to I and J.",
-        "dica_rnal": "💡 **TIP:** Compares OLX ad location with RNAL. Reads A and D, saves to C, E, and F.",
-        "dica_olx": "💡 **TIP:** Validates car mileage on OLX. Compares C with ad (A). Saves to E.",
+        "dica_siac": "💡 **Workflow:**\n1- Reads data from Columns G and H.\n2- Performs automatic microchip validation on the SIAC.pt website.\n3- Records the validation result in Columns I and J.",
+        "dica_rnal": "💡 **Workflow:**\n1- Reads the ad ID from Column A.\n2- Scrapes the ad location on olx.pt and records the result in Column C.\n3- Reads the Local Accommodation Number from Column D and validates it on the RNAL website: https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr=AdID\n4- Scrapes the validation result and records the information in Column E.\n5- Compares the OLX location with the RNAL location and records the suggestion in Column F.",
+        "dica_olx": "💡 **Workflow:**\n1- Reads the ad ID from Column A.\n2- Accesses olx.pt and scrapes the mileage presented in the ad (LIVE).\n3- Records the obtained mileage in Column D.\n4- Compares the values in Column C with those in Column D.\n5- Records the validation result in Column E.",
         "restarting_browser": "♻️ Restarting browser for stability...",
         "val_waiting": "⚠️ No result - Confirm on RNET ⚠️",
         "val_correct": "✅ Correct Location ✅",
         "val_wrong": "❌ Wrong Location ❌",
         "km_wrong": "✅ Incorrect Km",
         "km_fixed": "❌ Corrected Km",
+        "km_missing_param": "Parameter not filled",
         "cleaning": "Cleaning rows (Syncing with sheet)...",
         "rows_removed": "Removed {} rows!",
         "no_rows": "No rows to remove.",
@@ -542,7 +544,7 @@ async def process_list_incremental(
             check_val = val[0] if isinstance(val, (tuple, list)) else val
             if not str(check_val).strip() or str(check_val).lower() == "nan": res = "N/A"
             else:
-                status_text.text(t("status_working", i+1, total, status_display))
+                status_text.text(t("status_working", status_display))
                 res = await checker_func(page, cleaned, **extra_params)
             
             results[i] = res
@@ -771,9 +773,19 @@ with tab_olx:
                         validation = "..."
                         if any(msg in found_km_str for msg in ["⚠️ Anúncio já foi moderado ⚠️", "⚠️ Anúncio inactivo ⚠️"]):
                             validation = found_km_str
+                        elif "Km não encontrado" in found_km_str:
+                            validation = t("km_missing_param")
                         elif found_km_str != "...":
-                            if sys_km and found_km_clean and sys_km in found_km_clean: validation = t("km_wrong")
-                            else: validation = t("km_fixed")
+                            # logic: if found_km has 6+ digits (e.g. 220000) and sys_km (e.g. 220) is inside it -> ok
+                            # if found_km has < 5 digits -> suspicious/wrong format
+                            if sys_km and found_km_clean:
+                                if len(found_km_clean) >= 6 and sys_km in found_km_clean:
+                                    validation = t("km_wrong") # "✅Km errados" (meaning they need to be flagged as wrong/different according to user's sheet logic)
+                                elif len(found_km_clean) < 5:
+                                    validation = t("km_wrong") # Too many or too few digits? User said < 5 is error.
+                                else:
+                                    if sys_km in found_km_clean: validation = t("km_wrong")
+                                    else: validation = t("km_fixed")
                         
                         return (found_km_str, validation)
 
