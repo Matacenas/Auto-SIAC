@@ -55,7 +55,7 @@ TRANSLATIONS = {
         "btn_start": "🚀 Iniciar Validação",
         "btn_open_sheet": "📖 Abrir Folha",
         "btn_clear_reg": "🧹 Limpar Registados (Ambos ✅)",
-        "btn_clear_mod": "🧹 Limpar Moderados/Inactivos",
+        "btn_clear_mod": "🧹 Limpar Corrigidos pelo userModerados/Inactivos",
         "btn_clear_loc": "🧹 Limpar Localização Correcta",
         "status_working": "🔍 A Trabalhar: {}",
         "status_done": "Concluído!",
