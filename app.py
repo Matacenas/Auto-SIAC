@@ -92,7 +92,7 @@ TRANSLATIONS = {
         "btn_start": "🚀 Start Validation",
         "btn_open_sheet": "📖 Open Sheet",
         "btn_clear_reg": "🧹 Clear Registered (Both ✅)",
-        "btn_clear_mod": "🧹 Clear Moderated/Inactive",
+        "btn_clear_mod": "🧹 Clear Corrected by user/Moderated/Inactive",
         "btn_clear_loc": "🧹 Clear Correct Location",
         "status_working": "🔍 Working on: {}",
         "status_done": "Completed!",
