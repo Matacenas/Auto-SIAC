@@ -611,7 +611,7 @@ with tab_siac:
                                 ws_i.update(range_name=f"I2:I{1+len(sf)}", values=sf)
                                 ws_i.update(range_name=f"J2:J{1+len(sc)}", values=sc)
 
-                    with st.spinner(t("status_working", "?", "?", "SIAC")):
+                    with st.spinner(""):
                         asyncio.run(process_list_incremental(interleaved, check_siac_on_page, init_url=SIAC_URL, callback=update_siac_gs, existing_results=existing_results))
                     st.success(t("status_done"))
                 except Exception as e: st.error(f"Erro: {e}")
@@ -696,7 +696,7 @@ with tab_rnt:
                         rnt_data = await check_rnt_rnal_only(page, r_id)
                         return (olx_loc, rnt_data)
 
-                    with st.spinner(t("status_working", "?", "?", "AL")):
+                    with st.spinner(""):
                         combined_ids = list(zip(olx_ids, rnal_ids))
                         asyncio.run(process_list_incremental(combined_ids, al_checker, callback=update_al_gs, existing_results=existing_val))
                     st.success(t("status_done"))
@@ -771,25 +771,35 @@ with tab_olx:
                         found_km_clean = found_km_str.replace('km', '').replace(' ', '').replace('.', '').replace(',', '').strip().lower()
                         
                         validation = "..."
+                        if sys_km:
+                            sys_km_clean = "".join(filter(str.isdigit, str(sys_km)))
+                        else:
+                            sys_km_clean = ""
+
                         if any(msg in found_km_str for msg in ["⚠️ Anúncio já foi moderado ⚠️", "⚠️ Anúncio inactivo ⚠️"]):
                             validation = found_km_str
                         elif "Km não encontrado" in found_km_str:
                             validation = t("km_missing_param")
-                        elif found_km_str != "...":
-                            # logic: if found_km has 6+ digits (e.g. 220000) and sys_km (e.g. 220) is inside it -> ok
-                            # if found_km has < 5 digits -> suspicious/wrong format
-                            if sys_km and found_km_clean:
-                                if len(found_km_clean) >= 6 and sys_km in found_km_clean:
-                                    validation = t("km_wrong") # "✅Km errados" (meaning they need to be flagged as wrong/different according to user's sheet logic)
+                        if found_km_str != "...":
+                            found_km_clean = "".join(filter(str.isdigit, found_km_str))
+                            
+                            if found_km_clean:
+                                if len(found_km_clean) >= 6:
+                                    # 6+ digits is the professional/corrected format (e.g., 143.940)
+                                    validation = t("km_fixed")
                                 elif len(found_km_clean) < 5:
-                                    validation = t("km_wrong") # Too many or too few digits? User said < 5 is error.
+                                    # Less than 5 is definitely wrong/incomplete
+                                    validation = t("km_wrong")
                                 else:
-                                    if sys_km in found_km_clean: validation = t("km_wrong")
-                                    else: validation = t("km_fixed")
+                                    # 5 digits case: check if it matches the sheet prefix
+                                    if sys_km_clean and sys_km_clean in found_km_clean:
+                                        validation = t("km_wrong") # Matches prefix but still in the "old/wrong" format
+                                    else:
+                                        validation = t("km_fixed")
                         
                         return (found_km_str, validation)
 
-                    with st.spinner(t("status_working", "?", "?", "OLX")):
+                    with st.spinner(""):
                         # Pass zipped list to show Ad ID in status
                         combined = list(zip(ids, system_km))
                         asyncio.run(process_list_incremental(combined, cars_checker, callback=update_cars_gs, batch_size=10, existing_results=existing_val))
