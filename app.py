@@ -331,14 +331,17 @@ async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
             if km_val: return km_val
             
             content = (await page.content()).lower()
-            if "já não está disponível" in content:
-                return "⚠️ Anúncio já foi moderado ⚠️"
-            if "ups, algo não está bem" in content:
-                return "⚠️ Anúncio inactivo ⚠️"
-            if "não se encontra disponível" in content or "anúncio removido" in content:
-                return "🚫 Inativo/Vendido"
+            if "já não está disponível" in content or "already moderated" in content:
+                # We return a specific code or the translated string directly if we want it in Col D
+                # However, to maintain translation in Col D, we must use the t() function inside the checker
+                # but t() is available in the UI loop. Let's return a unique string that the checker maps.
+                return "ERR_MODERATED"
+            if "ups, algo não está bem" in content or "inactive" in content.lower():
+                return "ERR_INACTIVE"
+            if "não se encontra disponível" in content or "anúncio removido" in content or "removed" in content.lower():
+                return "ERR_INACTIVE"
             if attempt < retries: await asyncio.sleep(2); continue
-            return "❓ Km não encontrado"
+            return "ERR_NOT_FOUND"
         except:
             if attempt < retries: await asyncio.sleep(2); continue
             return "⚠️ Erro Conexão"
@@ -780,29 +783,34 @@ with tab_olx:
                         else:
                             sys_km_clean = ""
 
-                        if any(msg in found_km_str for msg in ["⚠️ Anúncio já foi moderado ⚠️", "⚠️ Anúncio inactivo ⚠️", "already moderated", "inactive"]):
-                            if "moderado" in found_km_str or "moderated" in found_km_str.lower():
-                                validation = t("km_moderated")
-                            else:
-                                validation = t("km_inactive")
-                        elif "Km não encontrado" in found_km_str:
+                        # Map internal codes to translated strings
+                        if found_km_str == "ERR_MODERATED":
+                            found_km_str = t("km_moderated")
+                            validation = found_km_str
+                        elif found_km_str in ["ERR_INACTIVE", "🚫 Inativo/Vendido"]:
+                            found_km_str = t("km_inactive")
+                            validation = found_km_str
+                        elif found_km_str == "ERR_NOT_FOUND":
+                            found_km_str = "❓ Km não encontrado"
                             validation = t("km_missing_param")
-                        if found_km_str != "...":
-                            found_km_clean = "".join(filter(str.isdigit, found_km_str))
-                            
-                            if found_km_clean:
-                                if len(found_km_clean) >= 6:
-                                    # 6+ digits is the professional/corrected format (e.g., 143.940)
-                                    validation = t("km_fixed")
-                                elif len(found_km_clean) < 5:
-                                    # Less than 5 is definitely wrong/incomplete
-                                    validation = t("km_wrong")
-                                else:
-                                    # 5 digits case: check if it matches the sheet prefix
-                                    if sys_km_clean and sys_km_clean in found_km_clean:
-                                        validation = t("km_wrong") # Matches prefix but still in the "old/wrong" format
-                                    else:
+                        
+                        if validation == "...": # If not already set by error codes
+                            if found_km_str != "...":
+                                found_km_clean = "".join(filter(str.isdigit, found_km_str))
+                                
+                                if found_km_clean:
+                                    if len(found_km_clean) >= 6:
+                                        # 6+ digits is the professional/corrected format (e.g., 143.940)
                                         validation = t("km_fixed")
+                                    elif len(found_km_clean) < 5:
+                                        # Less than 5 is definitely wrong/incomplete
+                                        validation = t("km_wrong")
+                                    else:
+                                        # 5 digits case: check if it matches the sheet prefix
+                                        if sys_km_clean and sys_km_clean in found_km_clean:
+                                            validation = t("km_wrong") # Matches prefix but still in the "old/wrong" format
+                                        else:
+                                            validation = t("km_fixed")
                         
                         return (found_km_str, validation)
 
