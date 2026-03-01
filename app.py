@@ -89,7 +89,7 @@ TRANSLATIONS = {
         "rnal_tab": "🏠 RNAL",
         "rnal_sub": "🏠 RNAL - Local Accommodation",
         "olx_tab": "🚗 OLX",
-        "olx_sub": "🚗 OLX - Car Mileage",
+        "olx_sub": "🚗 OLX - Car Kilometers",
         "gs_url_label": "Google Sheet URL",
         "btn_start": "🚀 Start Validation",
         "btn_open_sheet": "📖 Open Sheet",
@@ -102,13 +102,13 @@ TRANSLATIONS = {
         "err_no_sheet": "ERROR: Sheet '{}' not found in the file!",
         "dica_siac": "💡 **Workflow:**\n\n1. Reads data from Columns G and H.\n2. Performs automatic microchip validation on the SIAC.pt website.\n3. Records the validation result in Columns I and J.",
         "dica_rnal": "💡 **Workflow:**\n\n1. Reads the ad ID from Column A.\n2. Scrapes the ad location on olx.pt and records the result in Column C.\n3. Reads the Local Accommodation Number from Column D and validates it on the RNAL website:\n   https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr=AdID\n4. Scrapes the validation result and records the information in Column E.\n5. Compares the OLX location with the RNAL location and records the suggestion in Column F.",
-        "dica_olx": "💡 **Workflow:**\n\n1. Reads the ad ID from Column A.\n2. Accesses olx.pt and scrapes the mileage presented in the ad (LIVE).\n3. Records the obtained mileage in Column D.\n4. Compares the values in Column C with those in Column D.\n5. Records the validation result in Column E.",
+        "dica_olx": "💡 **Workflow:**\n\n1. Reads the ad ID from Column A.\n2. Accesses olx.pt and scrapes the Kilometers presented in the ad (LIVE).\n3. Records the obtained Kilometers in Column D.\n4. Compares the values in Column C with those in Column D.\n5. Records the validation result in Column E.",
         "restarting_browser": "♻️ Restarting browser for stability...",
         "val_waiting": "⚠️ No result - Confirm on RNET ⚠️",
         "val_correct": "✅ Correct Location ✅",
         "val_wrong": "❌ Wrong Location ❌",
-        "km_wrong": "❌ Incorrect mileage ❌",
-        "km_fixed": "✅ Mileage corrected by user ✅",
+        "km_wrong": "❌ Incorrect Kilometers ❌",
+        "km_fixed": "✅ Kilometers corrected by user ✅",
         "km_missing_param": "Parameter not filled",
         "km_moderated": "⚠️ Ad Already Moderated ⚠️",
         "km_inactive": "⚠️ Ad Inactive ⚠️",
@@ -842,7 +842,7 @@ with tab_olx:
                                 "⚠️ Ad Already Moderated ⚠️",
                                 "⚠️ Ad Inactive ⚠️",
                                 "✅ KM corrigidos pelo user ✅",
-                                "✅ Mileage corrected by user ✅"
+                                "✅ Kilometers corrected by user ✅"
                             ])
                         
                         count = batch_clear_rows(ws, data, is_olx_cleanup)
