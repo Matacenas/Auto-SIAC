@@ -526,7 +526,7 @@ async def process_list_incremental(
         total = len(items)
         for i, val in enumerate(items):
             # Skip if we have a result. Placeholder "..." or empty string doesn't count.
-            has_result = isinstance(results[i], str) and results[i].strip() not in ["", "..."]
+            has_result = (isinstance(results[i], str) and results[i].strip() not in ["", "..."]) or isinstance(results[i], (tuple, list))
             if i < len(results) and has_result:
                 progress_bar.progress((i + 1) / total)
                 continue
@@ -677,8 +677,8 @@ with tab_rnt:
                             sh_u = gc_u.open_by_url(url_gs)
                             ws_u = get_worksheet_by_name(sh_u, "AUTO RNAL")
                             if ws_u:
-                                olx_formatted = [[r[0]] for r in results]
-                                rnal_formatted = [[r[1]] for r in results]
+                                olx_formatted = [[r[0] if isinstance(r, (tuple, list)) else ""] for r in results]
+                                rnal_formatted = [[r[1] if isinstance(r, (tuple, list)) else ""] for r in results]
                                 val_formatted = []
                                 for r in results:
                                     if isinstance(r, str):
@@ -763,8 +763,8 @@ with tab_olx:
                             sh_u = gc_u.open_by_url(url_gs)
                             ws_u = get_worksheet_by_name(sh_u, "Auto Km")
                             if ws_u:
-                                bot_km_fmt = [[r[0]] for r in results]
-                                val_fmt = [[r[1]] for r in results]
+                                bot_km_fmt = [[r[0] if isinstance(r, (tuple, list)) else ""] for r in results]
+                                val_fmt = [[r[1] if isinstance(r, (tuple, list)) else r] for r in results]
                                 ws_u.update(range_name=f"D2:D{1+len(bot_km_fmt)}", values=bot_km_fmt) # Col D
                                 ws_u.update(range_name=f"E2:E{1+len(val_fmt)}", values=val_fmt) # Col E
                     
