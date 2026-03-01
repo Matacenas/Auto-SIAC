@@ -526,7 +526,10 @@ async def process_list_incremental(
         total = len(items)
         for i, val in enumerate(items):
             # Skip if we have a result. Placeholder "..." or empty string doesn't count.
-            has_result = (isinstance(results[i], str) and results[i].strip() not in ["", "..."]) or isinstance(results[i], (tuple, list))
+            # Skip if we have a definitive result. Placeholder "..." or empty string doesn't count.
+            terminal_states = ["✅", "❌", "🚩"]
+            val_to_check = str(results[i][1]) if isinstance(results[i], (tuple, list)) else str(results[i])
+            has_result = any(s in val_to_check for s in terminal_states)
             if i < len(results) and has_result:
                 progress_bar.progress((i + 1) / total)
                 continue
@@ -662,28 +665,40 @@ with tab_rnt:
                         st.stop()
                     olx_ids = ws.col_values(1)[1:] # A
                     rnal_ids = ws.col_values(4)[1:] # D
+                    existing_olx_loc = ws.col_values(3)[1:] # C
+                    existing_rnal_data = ws.col_values(5)[1:] # E
                     existing_val = ws.col_values(6)[1:] # F
                     
                     # Pad lists
-                    max_len = max(len(olx_ids), len(rnal_ids))
+                    max_len = max(len(olx_ids), len(rnal_ids), len(existing_olx_loc), len(existing_rnal_data), len(existing_val))
                     olx_ids += [""] * (max_len - len(olx_ids))
                     rnal_ids += [""] * (max_len - len(rnal_ids))
-                    existing_val += ["..."] * (max_len - len(existing_val))
+                    existing_olx_loc += [""] * (max_len - len(existing_olx_loc))
+                    existing_rnal_data += [""] * (max_len - len(existing_rnal_data))
+                    existing_val += [""] * (max_len - len(existing_val))
+                    
+                    combined_existing = []
+                    for i in range(max_len):
+                        # Results list stores (olx_loc, rnt_data). 
+                        # We use existing_val for skipping.
+                        combined_existing.append((existing_olx_loc[i], existing_rnal_data[i], existing_val[i]))
                     
                     async def update_al_gs(results):
-                        # results is a list of (olx_loc, rnal_loc)
+                        # results is a list of (found_olx, found_rnal, ?validation)
                         gc_u = get_gspread_client()
                         if gc_u:
                             sh_u = gc_u.open_by_url(url_gs)
                             ws_u = get_worksheet_by_name(sh_u, "AUTO RNAL")
                             if ws_u:
-                                olx_formatted = [[r[0] if isinstance(r, (tuple, list)) else ""] for r in results]
-                                rnal_formatted = [[r[1] if isinstance(r, (tuple, list)) else ""] for r in results]
+                                olx_formatted = [[r[0]] for r in results]
+                                rnal_formatted = [[r[1]] for r in results]
                                 val_formatted = []
                                 for r in results:
-                                    if isinstance(r, str):
-                                        val_formatted.append([r])
+                                    # If it already has a thumb/check/flag in the 3rd index, keep it
+                                    if len(r) > 2 and any(s in str(r[2]) for s in ["✅", "❌", "🚩"]):
+                                        val_formatted.append([r[2]])
                                         continue
+                                        
                                     olx_l, rnt_l = str(r[0]).lower(), str(r[1]).lower()
                                     if rnt_l == "n/a" or not rnt_l or "sem dados" in rnt_l:
                                         val_formatted.append([t("val_waiting")])
@@ -701,11 +716,12 @@ with tab_rnt:
                         o_id, r_id = ids_tuple
                         olx_loc = await check_olx_location(page, o_id)
                         rnt_data = await check_rnt_rnal_only(page, r_id)
-                        return (olx_loc, rnt_data)
+                        # Return 3-tuple to match combined_existing format
+                        return (olx_loc, rnt_data, "")
 
                     with st.spinner(""):
                         combined_ids = list(zip(olx_ids, rnal_ids))
-                        asyncio.run(process_list_incremental(combined_ids, al_checker, callback=update_al_gs, existing_results=existing_val))
+                        asyncio.run(process_list_incremental(combined_ids, al_checker, callback=update_al_gs, existing_results=combined_existing))
                     st.success(t("status_done"))
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
@@ -748,13 +764,19 @@ with tab_olx:
                         st.stop()
                     ids = ws.col_values(1)[1:] # Column A
                     system_km = ws.col_values(3)[1:] # Col C (User provided)
-                    existing_val = ws.col_values(5)[1:] # Col E
+                    existing_km = ws.col_values(4)[1:] # Col D (Scraped KM)
+                    existing_val = ws.col_values(5)[1:] # Col E (Validation)
                     
                     # Pad lists to ensure same length
-                    max_len = max(len(ids), len(system_km))
+                    max_len = max(len(ids), len(system_km), len(existing_km), len(existing_val))
                     ids += [""] * (max_len - len(ids))
                     system_km += [""] * (max_len - len(system_km))
-                    existing_val += ["..."] * (max_len - len(existing_val))
+                    existing_km += [""] * (max_len - len(existing_km))
+                    existing_val += [""] * (max_len - len(existing_val))
+                    
+                    combined_existing = []
+                    for i in range(max_len):
+                        combined_existing.append((existing_km[i], existing_val[i]))
                     
                     async def update_cars_gs(results):
                         # results is a list of (found_km, validation)
@@ -763,8 +785,8 @@ with tab_olx:
                             sh_u = gc_u.open_by_url(url_gs)
                             ws_u = get_worksheet_by_name(sh_u, "Auto Km")
                             if ws_u:
-                                bot_km_fmt = [[r[0] if isinstance(r, (tuple, list)) else ""] for r in results]
-                                val_fmt = [[r[1] if isinstance(r, (tuple, list)) else r] for r in results]
+                                bot_km_fmt = [[r[0]] for r in results]
+                                val_fmt = [[r[1]] for r in results]
                                 ws_u.update(range_name=f"D2:D{1+len(bot_km_fmt)}", values=bot_km_fmt) # Col D
                                 ws_u.update(range_name=f"E2:E{1+len(val_fmt)}", values=val_fmt) # Col E
                     
@@ -817,7 +839,7 @@ with tab_olx:
                     with st.spinner(""):
                         # Pass zipped list to show Ad ID in status
                         combined = list(zip(ids, system_km))
-                        asyncio.run(process_list_incremental(combined, cars_checker, callback=update_cars_gs, batch_size=10, existing_results=existing_val))
+                        asyncio.run(process_list_incremental(combined, cars_checker, callback=update_cars_gs, batch_size=10, existing_results=combined_existing))
                     st.success(t("status_done"))
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
