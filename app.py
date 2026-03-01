@@ -76,6 +76,10 @@ TRANSLATIONS = {
         "cleaning": "Limpando linhas (Sincronizando com a folha)...",
         "rows_removed": "Removidas {} linhas!",
         "no_rows": "Nenhuma linha para remover.",
+        "siac_registered": "✅ REGISTADO",
+        "siac_not_registered": "❌ SEM REGISTO",
+        "siac_missing": "🚩 DESAPARECIDO",
+        "siac_unknown": "❓ Desconhecido",
         "footer": "Validação Automática Multi-Project 2026"
     },
     "EN": {
@@ -115,6 +119,10 @@ TRANSLATIONS = {
         "cleaning": "Cleaning rows (Syncing with sheet)...",
         "rows_removed": "Removed {} rows!",
         "no_rows": "No rows to remove.",
+        "siac_registered": "✅ Registered",
+        "siac_not_registered": "❌ Unregistered",
+        "siac_missing": "🚩 Missing",
+        "siac_unknown": "❓ Unknown",
         "footer": "Multi-Project Auto Validation 2026"
     }
 }
@@ -269,12 +277,12 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
             await asyncio.sleep(4.0)
                 
             content = await page.content()
-            if SIAC_TEXT_MISSING in content: return "🚩 DESAPARECIDO"
-            if SIAC_TEXT_REGISTERED in content: return "✅ REGISTADO"
-            if SIAC_TEXT_NOT_REGISTERED in content: return "❌ SEM REGISTO"
+            if SIAC_TEXT_MISSING in content: return "siac_missing"
+            if SIAC_TEXT_REGISTERED in content: return "siac_registered"
+            if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
             
             if attempt < retries: await asyncio.sleep(2); continue
-            return "❓ Desconhecido"
+            return "siac_unknown"
         except:
             if attempt < retries: await asyncio.sleep(2); continue
             return "⚠️ Erro"
@@ -609,9 +617,9 @@ with tab_siac:
                     async def update_siac_gs(res):
                         ptr, sf, sc = 0, [], []
                         for i in range(rows):
-                            if i < len(femeas): sf.append([res[ptr]]); ptr += 1
+                            if i < len(femeas): sf.append([t(res[ptr]) if "siac_" in str(res[ptr]) else res[ptr]]); ptr += 1
                             else: sf.append(["N/A"])
-                            if i < len(crias): sc.append([res[ptr]]); ptr += 1
+                            if i < len(crias): sc.append([t(res[ptr]) if "siac_" in str(res[ptr]) else res[ptr]]); ptr += 1
                             else: sc.append(["N/A"])
                         gc_i = get_gspread_client()
                         if gc_i:
@@ -639,8 +647,11 @@ with tab_siac:
                         data = ws.get_all_values()
                         def is_siac_done(row):
                             if len(row) < 10: return False
-                            # Exact match only, no alerts
-                            return row[8].strip() == "✅ REGISTADO" and row[9].strip() == "✅ REGISTADO"
+                            # Exact match only, no alerts. Supports both PT and EN.
+                            res_i = row[8].strip()
+                            res_j = row[9].strip()
+                            reg_labels = ["✅ REGISTADO", "✅ Registered"]
+                            return res_i in reg_labels and res_j in reg_labels
                         
                         count = batch_clear_rows(ws, data, is_siac_done)
                         if count > 0: st.success(t("rows_removed", count))
