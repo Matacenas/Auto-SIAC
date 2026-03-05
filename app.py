@@ -258,7 +258,7 @@ def batch_clear_rows(ws, rows, condition_func):
 import time
 
 async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
-    """Valida um microchip no SIAC.pt de forma ultra-robusta com screenshots de erro."""
+    """Valida um microchip no SIAC.pt de forma leve e rápida sem screenshots."""
     chip = str(microchip).strip().split('.')[0].split(',')[0]
     if not chip or len(chip) < 10:
         return "❓ Formato Inválido"
@@ -294,7 +294,7 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
             # Escreve o número
             await page.keyboard.press("Control+A")
             await page.keyboard.press("Backspace")
-            await page.keyboard.type(chip, delay=50)
+            await page.keyboard.type(chip, delay=30)
             
             # Polling para detectar a resposta
             start_poll = time.time()
@@ -305,9 +305,6 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
                 if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
                 await asyncio.sleep(1)
 
-            # Se falhou o polling, tira screenshot para diagnóstico
-            await page.screenshot(path=f"DEBUG_SIAC_FALHA_{chip}.png")
-            
             if attempt < retries:
                 await page.reload()
                 await asyncio.sleep(2)
@@ -315,8 +312,7 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
                 
             return "siac_unknown"
             
-        except Exception as e:
-            await page.screenshot(path=f"DEBUG_SIAC_ERRO_TECNICO.png")
+        except Exception:
             if attempt < retries:
                 try: await page.goto(SIAC_URL, timeout=60000)
                 except: pass
@@ -467,102 +463,70 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
     return "⚠️ Erro OLX"
 
 async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
-    """Valida um Alojamento Local no RNAL com lógica de detecção de morada robusta."""
+    """Valida um Alojamento Local no RNAL com lógica de detecção de morada de última geração."""
     res = "❓ Sem Dados"
-    # Limpa o ID (remove .0)
     clean_id = str(reg_id).strip().split('.')[0]
     rnal_url = f"{RNT_AL_DIRECT_URL}{clean_id}"
     
     for attempt in range(retries + 1):
         try:
             await page.goto(rnal_url, timeout=45000, wait_until="domcontentloaded")
-            await asyncio.sleep(4)
+            await asyncio.sleep(5) # Delay maior para sites lentos
             
             content = await page.content()
             if "não foram encontrados" in content.lower():
                 return "❌ Não Encontrado"
 
-            # Nova estratégia robusta: procura Morada/Concelho/Freguesia em todo o DOM
-            data = await page.evaluate("""
+            # Estratégia de extração total mente agnóstica de estrutura
+            extracted_data = await page.evaluate("""
                 () => {
-                    const findValue = (label) => {
-                        const all = Array.from(document.querySelectorAll('span, td, div, b, label'));
-                        // Procura por labels exactos ou com :
-                        const target = all.find(el => {
-                            const t = el.innerText ? el.innerText.trim().toUpperCase() : "";
-                            return t === label.toUpperCase() || t === label.toUpperCase() + ":";
-                        });
-                        
-                        if (target) {
-                            // Tenta o próximo elemento ou o texto do pai removendo o label
-                            const next = target.nextElementSibling;
-                            if (next && next.innerText.trim().length > 1) return next.innerText.trim();
-                            
-                            const parentText = target.parentElement ? target.parentElement.innerText : "";
-                            const val = parentText.replace(new RegExp(label + ":?", "i"), "").trim();
-                            if (val.length > 1) return val;
-                        }
-
-                        // Fallback: procura o texto "Label: Valor" no mesmo elemento
-                        const containing = all.find(el => el.innerText && el.innerText.includes(label + ":"));
-                        if (containing) {
-                            const val = containing.innerText.split(label + ":")[1].trim();
-                            if (val.length > 1) return val;
-                        }
-                        return "";
+                    const allText = document.body.innerText;
+                    
+                    // Regex helpers para capturar o que vem depois dos labels chave
+                    const getMatch = (regex) => {
+                        const m = allText.match(regex);
+                        return m ? m[1].trim() : "";
                     };
 
-                    const morada = findValue('Morada') || findValue('Designação da via') || findValue('Localização');
-                    const concelho = findValue('Concelho');
-                    const freguesia = findValue('Freguesia');
-                    
+                    const morada = getMatch(/Morada:?\\s*([^\\n\\r]+)/i) || 
+                                   getMatch(/Designação da via:?\\s*([^\\n\\r]+)/i) ||
+                                   getMatch(/Localização:?\\s*([^\\n\\r]+)/i);
+                                   
+                    const concelho = getMatch(/Concelho:?\\s*([^\\n\\r(),]+)/i);
+                    const freguesia = getMatch(/Freguesia:?\\s*([^\\n\\r(),]+)/i);
+
                     if (morada || concelho || freguesia) {
                         let full = morada || "";
-                        if (freguesia) full += (full ? " - " : "") + freguesia;
-                        if (concelho) full += (full ? " (" : "") + concelho + (full.includes("(") ? "" : ")");
+                        if (freguesia && !full.includes(freguesia)) full += (full ? " - " : "") + freguesia;
+                        if (concelho && !full.includes(concelho)) full += (full ? " (" : "") + concelho + (full.includes("(") ? "" : ")");
                         return full.trim();
                     }
+                    
+                    // Fallback para Grid/Tabela via DOM se a regex falhar
+                    const cells = Array.from(document.querySelectorAll('td'));
+                    const moradaCell = cells.find(c => c.innerText && /Morada|Localização/i.test(c.innerText));
+                    if (moradaCell && moradaCell.nextElementSibling) {
+                         return moradaCell.nextElementSibling.innerText.trim();
+                    }
+                    
                     return null;
                 }
             """)
             
-            if data and len(data) > 3:
-                return data
-
-            # Fallback para Grid (Lista de resultados)
-            grid_res = await page.evaluate("""
-                () => {
-                    const row = document.querySelector('tr.GridRow, tr.GridAlternatingRow, .GridView tr:nth-child(2)');
-                    if (row) {
-                        const cells = Array.from(row.querySelectorAll('td'));
-                        if (cells.length > 2) {
-                            return cells[cells.length - 2].innerText.trim() + " (" + cells[cells.length - 3].innerText.trim() + ")";
-                        }
-                    }
-                    return null;
-                }
-            """)
-            if grid_res:
-                return grid_res
+            if extracted_data and len(extracted_data) > 3:
+                return extracted_data
 
             if attempt < retries:
                 await page.reload()
                 await asyncio.sleep(2)
                 continue
                 
-        except Exception as e:
-            # Screenshot de erro técnico (timeout, crash, etc)
-            try: await page.screenshot(path=f"DEBUG_RNAL_ERRO_{clean_id}.png")
-            except: pass
-            
+        except Exception:
             if attempt < retries:
                 await asyncio.sleep(2)
                 continue
             return f"⚠️ Erro RNAL"
             
-    # Se chegou aqui sem retornar, é porque não encontrou dados estruturados após as tentativas
-    try: await page.screenshot(path=f"DEBUG_RNAL_SEM_DADOS_{clean_id}.png")
-    except: pass
     return res
 
 # --- CORE ENGINE ---
@@ -589,8 +553,13 @@ async def process_list_incremental(
                 try: await browser.close()
                 except: pass
             
-            # Launch arguments simplificados para evitar detecção e problemas de memória
-            launch_args = ["--no-sandbox", "--disable-setuid-sandbox"]
+            # Launch arguments ultra-leves e seguros (Removida aceleração de hardware que causa crashes)
+            launch_args = [
+                "--no-sandbox", 
+                "--disable-setuid-sandbox",
+                "--disable-gpu", 
+                "--disable-dev-shm-usage"
+            ]
             
             try:
                 browser = await p.chromium.launch(headless=True, args=launch_args)
@@ -602,7 +571,7 @@ async def process_list_incremental(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 viewport={"width": 1280, "height": 800},
             )
-            context.set_default_timeout(45000)
+            context.set_default_timeout(60000) # Revertido para 60s
             page = await context.new_page()
             if init_url:
                 try:
