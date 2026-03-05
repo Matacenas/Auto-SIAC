@@ -258,36 +258,50 @@ def batch_clear_rows(ws, rows, condition_func):
 import time
 
 async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
-    """Valida um microchip no SIAC.pt usando o método copy-paste manual.
+    """Valida um microchip no SIAC.pt de forma ultra-robusta.
     """
-    chip = str(microchip).strip()
+    # Limpa o número (remove decimais .0 do Excel/Pandas)
+    chip = str(microchip).strip().split('.')[0].split(',')[0]
+    if not chip or len(chip) < 5:
+        return "❓ Formato Inválido"
+
     for attempt in range(retries + 1):
         try:
             if SIAC_URL not in page.url:
                 try:
                     await page.goto(SIAC_URL, timeout=60000, wait_until="load")
-                except Exception:
+                except:
                     pass
 
-            # Tempo para o splash screen desaparecer (Feedback do user: 2.5s)
-            await asyncio.sleep(2.5)
+            # Tempo para o splash screen (Feedback: 2.5s)
+            await asyncio.sleep(3)
 
-            # Localizador baseado no placeholder exacto das imagens do utilizador
-            # Tentamos o placeholder exacto, depois variantes
-            input_locator = page.get_by_placeholder("Indique o num. transponder")
-            
-            # Se não encontrar pelo placeholder exacto, tenta o seletor genérico
-            if await input_locator.count() == 0:
-                input_locator = page.locator('input[placeholder*="transponder"], input[placeholder*="0 |"], input[type="text"]')
+            # Encontra o campo de input via Evaluate para ser imune a mudanças de DOM
+            focused = await page.evaluate("""
+                () => {
+                    const inputs = Array.from(document.querySelectorAll('input'));
+                    const target = inputs.find(i => i.placeholder && (i.placeholder.includes('transponder') || i.placeholder.includes('0 |')))
+                                || inputs.find(i => i.type === 'text')
+                                || inputs[0];
+                    if (target) {
+                        target.value = '';
+                        target.focus();
+                        target.click();
+                        return true;
+                    }
+                    return false;
+                }
+            """)
 
-            # Clique para focar (essencial para simular o comportamento humano do copy-paste)
-            await input_locator.first.click()
-            await asyncio.sleep(0.2)
+            if not focused:
+                raise Exception("Campo de input não encontrado")
+
+            # Simula o copy-paste (fill)
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Backspace")
+            await page.keyboard.type(chip, delay=30)
             
-            # Preenchimento direto (copy-paste)
-            await input_locator.first.fill(chip)
-            
-            # Polling para detectar a resposta automática do Angular
+            # Polling rápido para ler o resultado (SIAC valida ao completar 15 dígitos)
             start_poll = time.time()
             while time.time() - start_poll < 10:
                 content = await page.content()
@@ -304,13 +318,9 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
             return "siac_unknown"
             
         except Exception as e:
-            # Em caso de erro, guardamos num log temporário para debug
-            with open("siac_last_error.txt", "a") as f:
-                 f.write(f"Attempt {attempt} for {chip}: {str(e)}\n")
-            
             if attempt < retries:
-                try: await page.goto(SIAC_URL, timeout=60000, wait_until="load")
-                except Exception: pass
+                try: await page.goto(SIAC_URL, timeout=60000)
+                except: pass
                 await asyncio.sleep(2)
                 continue
             return "⚠️ Erro SIAC"
@@ -458,58 +468,72 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
     return "⚠️ Erro OLX"
 
 async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
-    """Validates a Local Accommodation registration on RNAL.
-
-    Uses a two-strategy approach:
-    1. Detail Page: parses address fields (Morada, Concelho, Freguesia) directly.
-    2. Grid Fallback: reads the ASP.NET tabular results if the detail page is unavailable.
-    """
+    """Valida um Alojamento Local no RNAL com lógica de detecção de morada robusta."""
     res = "❓ Sem Dados"
-    rnal_url = f"{RNT_AL_DIRECT_URL}{reg_id}"
+    # Limpa o ID (remove .0)
+    clean_id = str(reg_id).strip().split('.')[0]
+    rnal_url = f"{RNT_AL_DIRECT_URL}{clean_id}"
+    
     for attempt in range(retries + 1):
         try:
             await page.goto(rnal_url, timeout=45000, wait_until="domcontentloaded")
-            await asyncio.sleep(3)
+            await asyncio.sleep(4)
+            
+            content = await page.content()
+            if "não foram encontrados" in content.lower():
+                return "❌ Não Encontrado"
 
-            # Strategy 1: Detail Page — look for structured address labels
-            details = await page.evaluate("""
+            # Nova estratégia robusta: procura Morada/Concelho/Freguesia em todo o DOM
+            data = await page.evaluate("""
                 () => {
-                    const getText = (label) => {
-                        const all = Array.from(document.querySelectorAll('span, label, td, b, p, div'));
-                        const target = all.find(l => {
-                            const t = l.innerText ? l.innerText.trim() : "";
-                            return t === label || t === label + ":" || t.startsWith(label + ":");
+                    const findValue = (label) => {
+                        const all = Array.from(document.querySelectorAll('span, td, div, b, label'));
+                        // Procura por labels exactos ou com :
+                        const target = all.find(el => {
+                            const t = el.innerText ? el.innerText.trim().toUpperCase() : "";
+                            return t === label.toUpperCase() || t === label.toUpperCase() + ":";
                         });
+                        
                         if (target) {
-                            const parent = target.parentElement;
-                            if (parent) {
-                                let text = parent.innerText.replace(label, '').replace(':', '').trim();
-                                if (text.length > 1) return text;
-                            }
+                            // Tenta o próximo elemento ou o texto do pai removendo o label
                             const next = target.nextElementSibling;
-                            if (next) return next.innerText.trim();
+                            if (next && next.innerText.trim().length > 1) return next.innerText.trim();
+                            
+                            const parentText = target.parentElement ? target.parentElement.innerText : "";
+                            const val = parentText.replace(new RegExp(label + ":?", "i"), "").trim();
+                            if (val.length > 1) return val;
                         }
-                        return null;
+
+                        // Fallback: procura o texto "Label: Valor" no mesmo elemento
+                        const containing = all.find(el => el.innerText && el.innerText.includes(label + ":"));
+                        if (containing) {
+                            const val = containing.innerText.split(label + ":")[1].trim();
+                            if (val.length > 1) return val;
+                        }
+                        return "";
                     };
 
-                    const address = getText('Morada') || getText('Localização');
-                    const concelho = getText('Concelho');
-                    const freguesia = getText('Freguesia');
-
-                    if (address) {
-                        return address + (freguesia ? ' - ' + freguesia : '') + (concelho ? ' (' + concelho + ')' : '');
+                    const morada = findValue('Morada') || findValue('Designação da via') || findValue('Localização');
+                    const concelho = findValue('Concelho');
+                    const freguesia = findValue('Freguesia');
+                    
+                    if (morada || concelho || freguesia) {
+                        let full = morada || "";
+                        if (freguesia) full += (full ? " - " : "") + freguesia;
+                        if (concelho) full += (full ? " (" : "") + concelho + (full.includes("(") ? "" : ")");
+                        return full.trim();
                     }
                     return null;
                 }
             """)
-            if details:
-                res = details
-                break
+            
+            if data and len(data) > 3:
+                return data
 
-            # Strategy 2: Grid Fallback — ASP.NET tabular search results
+            # Fallback para Grid (Lista de resultados)
             grid_res = await page.evaluate("""
                 () => {
-                    const row = document.querySelector('tr.GridRow, tr.GridAlternatingRow, .GridView tr:nth-child(2), table tr:nth-child(2)');
+                    const row = document.querySelector('tr.GridRow, tr.GridAlternatingRow, .GridView tr:nth-child(2)');
                     if (row) {
                         const cells = Array.from(row.querySelectorAll('td'));
                         if (cells.length > 2) {
@@ -520,19 +544,19 @@ async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
                 }
             """)
             if grid_res:
-                res = grid_res
-                break
+                return grid_res
 
-            if "não foram encontrados" in (await page.content()).lower():
-                res = "❌ Não Encontrado"
-                break
+            if attempt < retries:
+                await page.reload()
+                await asyncio.sleep(2)
+                continue
+                
+        except Exception as e:
             if attempt < retries:
                 await asyncio.sleep(2)
-        except Exception:
-            if attempt < retries:
-                await asyncio.sleep(2)
-            else:
-                res = "⚠️ Erro RNAL"
+                continue
+            return f"⚠️ Erro RNAL"
+            
     return res
 
 # --- CORE ENGINE ---
