@@ -324,11 +324,21 @@ def install_playwright_browsers():
         with st.spinner("🔧 A configurar ambiente (Playwright)..."):
             try:
                 import subprocess
-                # Tenta instalar apenas o chromium para ser mais rápido
-                subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
-                st.session_state.browsers_installed = True
+                import sys
+                # Usar sys.executable garante que usamos o mesmo python do streamlit
+                # --with-deps tenta instalar dependências de sistema se possível
+                cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode == 0:
+                    st.session_state.browsers_installed = True
+                else:
+                    st.error(f"Erro na instalação: {result.stderr}")
+                    # Tenta apenas o install sem o -m se falhar
+                    subprocess.run(["playwright", "install", "chromium"], check=True)
+                    st.session_state.browsers_installed = True
             except Exception as e:
-                st.error(f"Erro na instalação dos browsers: {e}")
+                st.error(f"Erro Crítico: {e}")
+                st.info("Dica: Adicione 'playwright' ao requirements.txt e 'libnss3' ao packages.txt")
 
 # --- ENGINE (STABLE RESTORED + CLOUD FIX) ---
 async def process_list_incremental(items, checker_func, ws, col_mappings, init_url=None, refresh_every=50, existing_data=None, **extra_params):
