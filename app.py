@@ -7,6 +7,7 @@ from google.oauth2.service_account import Credentials
 import os
 import json
 from typing import List, Optional, Callable, Awaitable, Any
+import time
 
 # --- CONFIGURATION ---
 LINKS_FILE = "links.json"
@@ -30,9 +31,7 @@ def save_link(key, url):
 
 SIAC_URL = "https://www.siac.pt/pt"
 OLX_BASE_URL = "https://www.olx.pt/"
-# Link Directo RNAL (Corrigido para o formato exacto do portal)
 RNT_AL_DIRECT_URL = "https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr="
-RNT_ET_URL = "https://rnt.turismodeportugal.pt/RNT/Pesquisa_ET.aspx"
 
 SIAC_TEXT_REGISTERED = "Animal com registo no SIAC"
 SIAC_TEXT_NOT_REGISTERED = "Animal sem registo"
@@ -65,7 +64,7 @@ TRANSLATIONS = {
         "dica_siac": "💡 **Processo de Validação:**\n\n1. Lê os dados das Colunas G e H.\n2. Realiza a validação automática do microchip no site do SIAC.pt.\n3. Regista o resultado da validação nas Colunas I e J.",
         "dica_rnal": "💡 **Processo de Validação:**\n\n1. Lê o ID do anúncio na Coluna A.\n2. Faz scraping da localização do anúncio em olx.pt e regista o resultado na Coluna C.\n3. Lê o Número de Alojamento Local da Coluna D e valida no site do RNAL:\n   https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr=AdID\n4. Faz scraping do resultado da validação e regista a informação na Coluna E.\n5. Compara a localização do OLX com a do RNAL e regista a sugestão na Coluna F.",
         "dica_olx": "💡 **Processo de Validação:**\n\n1. Lê o ID do anúncio na Coluna A.\n2. Acede a olx.pt e faz scraping dos quilómetros apresentados no anúncio (LIVE).\n3. Regista os quilómetros obtidos na Coluna D.\n4. Compara os valores da Coluna C com os da Coluna D.\n5. Regista o resultado da validação na Coluna E.",
-        "restarting_browser": "♻️ Reiniciando navegador para estabilidade...",
+        "restarting_browser": "♻️ Reiniciando navegador...",
         "val_waiting": "⚠️ Sem resultado - Confirmar no RNET ⚠️",
         "val_correct": "✅Localização Correcta ✅",
         "val_wrong": "❌ Localização Errada ❌",
@@ -74,7 +73,7 @@ TRANSLATIONS = {
         "km_missing_param": "Parâmetro não preenchido",
         "km_moderated": "⚠️ Anúncio já foi moderado ⚠️",
         "km_inactive": "⚠️ Anúncio inactivo ⚠️",
-        "cleaning": "Limpando linhas (Sincronizando com a folha)...",
+        "cleaning": "Limpando linhas...",
         "rows_removed": "Removidas {} linhas!",
         "no_rows": "Nenhuma linha para remover.",
         "siac_registered": "✅ REGISTADO",
@@ -108,7 +107,7 @@ TRANSLATIONS = {
         "dica_siac": "💡 **Workflow:**\n\n1. Reads data from Columns G and H.\n2. Performs automatic microchip validation on the SIAC.pt website.\n3. Records the validation result in Columns I and J.",
         "dica_rnal": "💡 **Workflow:**\n\n1. Reads the ad ID from Column A.\n2. Scrapes the ad location on olx.pt and records the result in Column C.\n3. Reads the Local Accommodation Number from Column D and validates it on the RNAL website:\n   https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr=AdID\n4. Scrapes the validation result and records the information in Column E.\n5. Compares the OLX location with the RNAL location and records the suggestion in Column F.",
         "dica_olx": "💡 **Workflow:**\n\n1. Reads the ad ID from Column A.\n2. Accesses olx.pt and scrapes the Kilometers presented in the ad (LIVE).\n3. Records the obtained Kilometers in Column D.\n4. Compares the values in Column C with those in Column D.\n5. Records the validation result in Column E.",
-        "restarting_browser": "♻️ Restarting browser for stability...",
+        "restarting_browser": "♻️ Restarting browser...",
         "val_waiting": "⚠️ No result - Confirm on RNET ⚠️",
         "val_correct": "✅ Correct Location ✅",
         "val_wrong": "❌ Wrong Location ❌",
@@ -117,7 +116,7 @@ TRANSLATIONS = {
         "km_missing_param": "Parameter not filled",
         "km_moderated": "⚠️ Ad Already Moderated ⚠️",
         "km_inactive": "⚠️ Ad Inactive ⚠️",
-        "cleaning": "Cleaning rows (Syncing with sheet)...",
+        "cleaning": "Cleaning rows...",
         "rows_removed": "Removed {} rows!",
         "no_rows": "No rows to remove.",
         "siac_registered": "✅ Registered",
@@ -139,155 +138,70 @@ st.set_page_config(page_title="Validação Automática", page_icon="🚀", layou
 
 # --- CUSTOM CSS ---
 st.markdown("""
-    <style>
-    /* Shrink the sidebar a bit */
-    [data-testid="stSidebar"] { min-width: 280px; max-width: 320px; }
-    /* Make Alert/Info boxes shrink to text width and look more professional */
-    [data-testid="stNotification"] { width: fit-content !important; min-width: 300px; max-width: 100%; border-radius: 10px; }
-    .stAlert { width: fit-content !important; min-width: 300px; max-width: 100%; border-radius: 10px; padding: 10px 20px; }
-    
-    /* ENLARGE TABS AND SHRINK BORDER */
-    button[data-baseweb="tab"] { 
-        font-size: 24px !important; 
-        height: 60px !important; 
-        font-weight: bold !important;
-        padding-left: 20px !important;
-        padding-right: 20px !important;
-    }
-    button[data-baseweb="tab"] p { font-size: 24px !important; }
-    
-    /* Shrink the underline of the tabs and unified dividers */
-    div[data-baseweb="tab-list"] { width: 500px !important; }
-    div[data-baseweb="tab-border"] { width: 500px !important; }
-    
-    /* UNIFY ALL DIVIDERS AND TIP BOXES (~500px) */
-    hr { width: 500px !important; margin-left: 0 !important; border-top: 2px solid #555; }
-    [data-testid="stNotification"] { width: 500px !important; border-radius: 10px; }
-    .stAlert { width: 500px !important; border-radius: 10px; padding: 10px 20px; }
-    </style>
-    """, unsafe_allow_html=True)
+<style>
+[data-testid="stSidebar"] { min-width: 280px; max-width: 320px; }
+div[data-baseweb="tab-list"] { width: 500px !important; }
+div[data-baseweb="tab-border"] { width: 500px !important; }
+hr { width: 500px !important; margin-left: 0 !important; }
+[data-testid="stNotification"] { width: 500px !important; }
+.stAlert { width: 500px !important; }
+button[data-baseweb="tab"] p { font-size: 24px !important; font-weight: bold; }
+</style>
+""", unsafe_allow_html=True)
 
 # --- SIDEBAR ---
 with st.sidebar:
     st.header(t("sidebar_config"))
-    
-    # Language Switcher - Vertical with Flag + Text (Final Visual Balancing)
-    # PT
-    colx1, colx2 = st.columns([1, 4])
-    with colx1: 
-        st.markdown("""
-            <div style='display: flex; align-items: center; justify-content: center; height: 38px;'>
-                <img src='https://flagcdn.com/w80/pt.png' style='height: 26px; border-radius: 2px; box-shadow: 0 0 2px rgba(0,0,0,0.5);'>
-            </div>
-        """, unsafe_allow_html=True)
-    with colx2:
-        if st.button("Português", key="btn_pt_final_v6", use_container_width=True):
-            st.session_state.lang = "PT"; st.rerun()
-    # EN
-    coly1, coly2 = st.columns([1, 4])
-    with coly1: 
-        st.markdown("""
-            <div style='display: flex; align-items: center; justify-content: center; height: 38px;'>
-                <img src='https://flagcdn.com/w80/gb.png' style='height: 26px; border-radius: 2px; box-shadow: 0 0 2px rgba(0,0,0,0.5);'>
-            </div>
-        """, unsafe_allow_html=True)
-    with coly2:
-        if st.button("English", key="btn_en_final_v6", use_container_width=True):
-            st.session_state.lang = "EN"; st.rerun()
+    c1, c2 = st.columns([1, 4])
+    with c1: st.markdown("<img src='https://flagcdn.com/w80/pt.png' style='height: 20px;'>", unsafe_allow_html=True)
+    with c2: 
+        if st.button("Português", key="pt"): st.session_state.lang = "PT"; st.rerun()
+    c3, c4 = st.columns([1, 4])
+    with c3: st.markdown("<img src='https://flagcdn.com/w80/gb.png' style='height: 20px;'>", unsafe_allow_html=True)
+    with c4:
+        if st.button("English", key="en"): st.session_state.lang = "EN"; st.rerun()
     
     st.divider()
     saved_links = load_links()
-
-    # Consolidated URL - Larger Label
     st.markdown(f"### {t('gs_url_label')}")
     current_gs = saved_links.get("gs_url") or GLOBAL_DEFAULT_URL
     url_gs = st.text_input("", value=current_gs, label_visibility="collapsed")
     if url_gs != saved_links.get("gs_url", ""): save_link("gs_url", url_gs)
-    
-    if url_gs:
-        st.link_button(t("btn_open_sheet"), url_gs, use_container_width=True)
+    if url_gs: st.link_button(t("btn_open_sheet"), url_gs, use_container_width=True)
 
 # --- SERVICES ---
-
 def get_gspread_client():
-    """Authenticates with Google Sheets using Streamlit Secrets."""
-    if "gcp_service_account" not in st.secrets:
-        st.error("Credenciais do Google (Service Account) não encontradas!")
-        return None
+    if "gcp_service_account" not in st.secrets: return None
     try:
         creds_dict = dict(st.secrets["gcp_service_account"])
-        if "\\n" in creds_dict["private_key"]:
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        
-        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        if "\\n" in creds_dict["private_key"]: creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(creds_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
         return gspread.authorize(creds)
-    except Exception as e:
-        st.error(f"Erro na autenticação: {e}")
-        return None
+    except: return None
 
 def get_worksheet_by_name(sh, target_name):
-    """Try to find worksheet by name (case-insensitive). Return None if not found."""
     try:
-        titles = [ws.title for ws in sh.worksheets()]
-        best_match = next((t for t in titles if t.strip().lower() == target_name.strip().lower()), None)
-        if best_match:
-            return sh.worksheet(best_match)
-        return None
-    except Exception as e:
-        print(f"Erro ao procurar aba: {e}")
-        return None
-
-def batch_clear_rows(ws, rows, condition_func):
-    """Efficiently clear rows matching a condition by filtering and overwriting."""
-    if not rows: return 0
-    header = rows[0]
-    new_rows = [header]
-    deleted_count = 0
-    for row in rows[1:]:
-        if not condition_func(row):
-            new_rows.append(row)
-        else:
-            deleted_count += 1
-    if deleted_count > 0:
-        ws.clear()
-        ws.update(range_name='A1', values=new_rows)
-    return deleted_count
-
-# --- SCRAPERS ---
-
-import time
+        ts = [ws.title for ws in sh.worksheets()]
+        match = next((t for t in ts if t.strip().lower() == target_name.strip().lower()), None)
+        return sh.worksheet(match) if match else None
+    except: return None
 
 def normalize_id(val: Any) -> str:
-    """Converte qualquer ID (microchip ou RNAL) em string limpa, lidando com notação científica."""
     if val is None: return ""
     s = str(val).strip()
     if not s or s.lower() == "nan": return ""
-    
-    # Remove .0 ou ,0 no final
     if s.endswith(".0") or s.endswith(",0"): s = s[:-2]
-    
-    # Trata Notação Científica (ex: 6.20E+14)
-    if "E+" in s.upper() or "E-" in s.upper():
-        try:
-            # Converte via float e depois int para remover o .0
-            return str(int(float(s.replace(',', '.'))))
+    if "E+" in s.upper():
+        try: return str(int(float(s.replace(',', '.'))))
         except: pass
-        
-    # Remove qualquer ponto residual se for puramente numérico e longo (Microchips)
-    if s.replace('.', '').replace(',', '').isdigit() and len(s) > 10:
-        return s.replace('.', '').replace(',', '')
-        
-    return s
+    return s.replace('.', '').replace(',', '') if s.replace('.','').isdigit() and len(s) > 10 else s
 
+# --- CHECKERS ---
 async def check_siac_on_page(page, microchip: str, log_func: Callable = None) -> str:
-    """Valida um microchip no SIAC.pt com alta resiliência."""
     def log(m):
         if log_func: log_func(f"[SIAC] {m}")
-    
     chip = normalize_id(microchip)
-    if not chip or len(chip) < 10:
-        return "❓ Formato Inválido"
+    if not chip or len(chip) < 10: return "❓ Formato Inválido"
 
     for attempt in range(2):
         try:
@@ -295,639 +209,192 @@ async def check_siac_on_page(page, microchip: str, log_func: Callable = None) ->
                 await page.goto(SIAC_URL, timeout=60000, wait_until="domcontentloaded")
                 await asyncio.sleep(4)
             
-            input_selector = "input[name='searchGtWro'], input[placeholder*='transponder']"
-            target_frame = page 
+            sel = "input[name='searchGtWro'], input[placeholder*='transponder']"
+            await page.evaluate(f"""(s, v) => {{
+                const el = document.querySelector(s);
+                if (el) {{ el.value = v; el.dispatchEvent(new Event('input', {{bubbles:true}})); el.focus(); return true; }}
+                return false;
+            }}""", sel, chip)
+            await page.keyboard.press("Enter")
+            log(f"Consultando {chip}...")
+            await asyncio.sleep(5)
             
-            input_el = await page.query_selector(input_selector)
-            if not input_el:
-                for frame in page.frames:
-                    try:
-                        exists = await frame.query_selector(input_selector)
-                        if exists:
-                            target_frame = frame
-                            break
-                    except: continue
-
-            log(f"Introduzindo transponder...")
-            await target_frame.evaluate(f"""
-                (sel, val) => {{
-                    const el = document.querySelector(sel);
-                    if (el) {{
-                        el.value = val;
-                        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        el.focus();
-                        return true;
-                    }}
-                    return false;
-                }}
-            """, input_selector, chip)
-
-            try:
-                await target_frame.click(input_selector)
-                await page.keyboard.press("Enter")
-                log("Pesquisa submetida.")
-            except: pass
-
-            await asyncio.sleep(4) 
-            
-            start_poll = time.time()
-            while time.time() - start_poll < 15:
-                res_val = await target_frame.evaluate(f"""
-                    () => {{
-                        const txt = document.body.innerText;
-                        if (txt.includes("{SIAC_TEXT_MISSING}")) return "siac_missing";
-                        if (txt.includes("{SIAC_TEXT_REGISTERED}") || txt.includes("com registo no SIAC") || txt.includes("registered")) return "siac_registered";
-                        if (txt.includes("{SIAC_TEXT_NOT_REGISTERED}") || txt.includes("sem registo") || txt.includes("unregistered")) return "siac_not_registered";
-                        return "polling";
-                    }}
-                """)
-                if res_val != "polling":
-                    log(f"Status detetado: {res_val}")
-                    return res_val
-                await asyncio.sleep(1)
-            
-            log("Timeout no portal SIAC.")
-            return "siac_error"
+            res = await page.evaluate(f"""() => {{
+                const t = document.body.innerText;
+                if (t.includes("{SIAC_TEXT_MISSING}")) return "siac_missing";
+                if (t.includes("{SIAC_TEXT_REGISTERED}")) return "siac_registered";
+                if (t.includes("{SIAC_TEXT_NOT_REGISTERED}")) return "siac_not_registered";
+                return "polling";
+            }}""")
+            if res != "polling": return res
+            await asyncio.sleep(2)
         except Exception as e:
-            log(f"Erro: {str(e)[:50]}")
+            log(f"Erro: {str(e)[:40]}")
             if attempt == 0: await page.reload()
     return "siac_error"
 
-async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
-    """Extrai os KM de um anúncio OLX."""
-    clean_id = normalize_id(ad_id)
-    if not clean_id or clean_id == "N/A": return "ERR_ID"
-    
-    # FORMATO ORIGINAL QUE FUNCIONAVA: OLX_BASE_URL + ID
-    if clean_id.isdigit(): ad_url = f"{OLX_BASE_URL}{clean_id}"
-    else: ad_url = clean_id if clean_id.startswith('http') else f"{OLX_BASE_URL}{clean_id}"
+async def check_olx_km(page, ad_id: str, log_func: Callable = None) -> str:
+    def log(m):
+        if log_func: log_func(f"[OLX] {m}")
+    cid = normalize_id(ad_id)
+    url = f"{OLX_BASE_URL}{cid}"
+    try:
+        log(f"Acedendo {cid}...")
+        await page.goto(url, timeout=45000, wait_until="domcontentloaded")
+        await asyncio.sleep(4)
+        km = await page.evaluate("""() => {
+            const m = document.body.innerText.match(/(\\d[\\d\\s\\.,]*)\\s*km/i);
+            return m ? m[0].trim() : null;
+        }""")
+        if km: return km
+        content = (await page.content()).lower()
+        if "não está disponível" in content: return "ERR_MODERATED"
+        return "ERR_NOT_FOUND"
+    except: return "⚠️ Erro OLX"
 
-    for attempt in range(retries + 1):
-        try:
-            await page.goto(ad_url, timeout=45000, wait_until="domcontentloaded")
-            await asyncio.sleep(5) 
-            
-            km_val = await page.evaluate("""
-                () => {
-                    const findInText = (text) => {
-                        const m = text.match(/(\\d[\\d\\s\\.,]*)\\s*km/i);
-                        return m ? m[0].trim() : null;
-                    };
+async def check_olx_location(page, ad_id: str, log_func: Callable = None) -> str:
+    def log(m):
+        if log_func: log_func(f"[OLX] {m}")
+    cid = normalize_id(ad_id)
+    url = f"{OLX_BASE_URL}{cid}"
+    try:
+        await page.goto(url, timeout=45000, wait_until="domcontentloaded")
+        await asyncio.sleep(4)
+        loc = await page.evaluate("""() => {
+            const el = document.querySelector('span[data-testid="location-label"]');
+            return el ? el.innerText.trim() : null;
+        }""")
+        return loc or "❓ Localização"
+    except: return "⚠️ Erro OLX"
 
-                    const specItems = Array.from(document.querySelectorAll('li, div[data-testid="ad_properties_item"], .ad-properties__item'));
-                    for (const item of specItems) {
-                        const t = item.innerText || "";
-                        if (t.includes('Quilómetros')) {
-                            const val = findInText(t);
-                            if (val) return val;
-                            const children = Array.from(item.querySelectorAll('span, p, div'));
-                            for (const c of children) {
-                                const v = findInText(c.innerText);
-                                if (v) return v;
-                            }
-                        }
-                    }
-
-                    const bodyText = document.body.innerText;
-                    const lines = bodyText.split('\\n');
-                    for (let i = 0; i < lines.length; i++) {
-                        if (lines[i].includes('Quilómetros')) {
-                            for (let j = i; j <= i + 3 && j < lines.length; j++) {
-                                const val = findInText(lines[j]);
-                                if (val) return val;
-                            }
-                        }
-                    }
-
-                    const genericMatch = bodyText.match(/(\\d[\\d\\s\\.,]*)\\s*km/i);
-                    return genericMatch ? genericMatch[0].trim() : null;
-                }
-            """)
-            if km_val:
-                return km_val
-
-            content = (await page.content()).lower()
-            if "já não está disponível" in content or "already moderated" in content:
-                return "ERR_MODERATED"
-            if "ups, algo não está bem" in content or "inactive" in content:
-                return "ERR_INACTIVE"
-            if "não se encontra disponível" in content or "anúncio removido" in content or "removed" in content:
-                return "ERR_INACTIVE"
-            if attempt < retries:
-                await asyncio.sleep(2)
-                continue
-            return "ERR_NOT_FOUND"
-        except Exception:
-            if attempt < retries:
-                await asyncio.sleep(2)
-                continue
-            return "⚠️ Erro Conexão"
-    return "⚠️ Erro OLX"
-
-async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
-    """Extrai a localização (Cidade - Distrito) de um anúncio OLX."""
-    clean_id = normalize_id(ad_id)
-    if not clean_id or clean_id == "N/A": return "N/A"
-
-    # FORMATO ORIGINAL QUE FUNCIONAVA: OLX_BASE_URL + ID
-    if clean_id.isdigit(): ad_url = f"{OLX_BASE_URL}{clean_id}"
-    else: ad_url = clean_id if clean_id.startswith('http') else f"{OLX_BASE_URL}{clean_id}"
-
-    for attempt in range(retries + 1):
-        try:
-            await page.goto(ad_url, timeout=45000, wait_until="domcontentloaded")
-            await asyncio.sleep(4)
-
-            location = await page.evaluate("""
-                () => {
-                    const blacklist = ['LOCALIZAÇÃO', 'MAP DATA', 'CLICK TO TOGGLE', 'METRIC', 'IMPERIAL', 'UNITS', '©', 'LOJA', 'GEOGR'];
-
-                    const isMetadata = (text) => {
-                        if (!text) return true;
-                        const t = text.trim();
-                        // Reject distance patterns (e.g. "1 km", "500 m") and blacklisted UI text
-                        if (/\\d+.*km/i.test(t) || /\\d+.*m\\s*$/i.test(t)) return true;
-                        const up = t.toUpperCase();
-                        return blacklist.some(b => up.includes(b));
-                    };
-
-                    const surgicalExtract = (container) => {
-                        if (!container) return null;
-                        const elements = Array.from(container.querySelectorAll('span, a, p'))
-                            .map(el => el.innerText.trim())
-                            .filter(t => t.length > 2 && !isMetadata(t));
-                        const unique = [...new Set(elements)];
-                        return unique.length > 0 ? unique.slice(0, 2).join(' - ') : null;
-                    };
-
-                    // Priority 1: Direct location data-testid link
-                    const locLink = document.querySelector('a[data-testid="ad-location-link"]');
-                    if (locLink) {
-                        const res = surgicalExtract(locLink);
-                        if (res) return res;
-                    }
-
-                    // Priority 2: Find the LOCALIZAÇÃO section header and walk up the DOM
-                    const all = Array.from(document.querySelectorAll('span, p, a, div, h2, h3'));
-                    const header = all.find(el => el.innerText && el.innerText.trim().toUpperCase() === 'LOCALIZAÇÃO');
-                    if (header) {
-                        let parent = header.parentElement;
-                        for (let i = 0; i < 3 && parent; i++) {
-                            const res = surgicalExtract(parent);
-                            if (res) return res;
-                            parent = parent.parentElement;
-                        }
-                    }
-
-                    return null;
-                }
-            """)
-            if location:
-                return location
-            if attempt < retries:
-                await asyncio.sleep(2)
-                continue
-            return "❓ Localização"
-        except Exception:
-            if attempt < retries:
-                await asyncio.sleep(2)
-                continue
-            return "⚠️ Conexão OLX"
-    return "⚠️ Erro OLX"
-
-async def check_rnt_rnal_only(page, reg_id: str, log_func: Callable = None, retries: int = 1) -> str:
-    """Valida um Alojamento Local no RNAL com extração cirúrgica."""
+async def check_rnt_rnal_only(page, reg_id: str, log_func: Callable = None) -> str:
     def log(m):
         if log_func: log_func(f"[RNT] {m}")
-        
-    clean_id = normalize_id(reg_id)
-    rnal_url = f"{RNT_AL_DIRECT_URL}{clean_id}"
-    log(f"Iniciando scraping RNT para ID: {clean_id}")
-    
-    for attempt in range(retries + 1):
-        try:
-            await page.goto(rnal_url, timeout=60000, wait_until="domcontentloaded")
-            await asyncio.sleep(8) 
-            
-            elements_to_try = [page] + page.frames
-            log(f"Página RNT carregada. Analisando {len(elements_to_try)} frames...")
-            
-            for target in elements_to_try:
-                try:
-                    captured = await target.evaluate("""
-                        () => {
-                            const allElements = Array.from(document.querySelectorAll('.TableRecords_Label, td, span, div'));
-                            const moradaLabel = allElements.find(el => {
-                                const t = el.innerText.trim();
-                                return t === 'Morada' || t === 'Morada:';
-                            });
-                            
-                            if (moradaLabel) {
-                                if (moradaLabel.classList.contains('TableRecords_Label')) {
-                                    return moradaLabel.parentElement.innerText.replace(/Morada:?/i, '').trim();
-                                }
-                                if (moradaLabel.tagName === 'TD' && moradaLabel.nextElementSibling) {
-                                    return moradaLabel.nextElementSibling.innerText.trim();
-                                }
-                            }
-                            return null;
-                        }
-                    """)
-                    if captured and len(captured) > 5:
-                        final = " ".join(captured.split()).strip()
-                        log(f"Morada encontrada: {final[:40]}...")
-                        return final
-                except: continue
+    rid = normalize_id(reg_id)
+    url = f"{RNT_AL_DIRECT_URL}{rid}"
+    try:
+        await page.goto(url, timeout=60000, wait_until="domcontentloaded")
+        await asyncio.sleep(6)
+        morada = await page.evaluate("""() => {
+            const labels = Array.from(document.querySelectorAll('.TableRecords_Label, td'));
+            const l = labels.find(el => el.innerText.includes('Morada'));
+            if (l) {
+                if (l.tagName === 'TD' && l.nextElementSibling) return l.nextElementSibling.innerText.trim();
+                return l.parentElement.innerText.replace('Morada', '').trim();
+            }
+            return null;
+        }""")
+        return morada or "❓ Sem Dados"
+    except: return "⚠️ Erro RNT"
 
-            log("Aviso: Morada não encontrada na estrutura da página.")
-            if attempt < retries:
-                await page.reload()
-                await asyncio.sleep(4)
-                continue
-                
-        except Exception as e:
-            log(f"Erro RNT: {str(e)[:50]}")
-            if attempt < retries:
-                await asyncio.sleep(4)
-                continue
-            return f"⚠️ Erro RNT"
-            
-    return "❓ Sem Dados"
-
-async def process_list_incremental(
-    items: List[Any], 
-    checker_func: Callable, 
-    ws: Any, # Worksheet object passed directly
-    col_mappings: List[int], # List of columns to update
-    init_url: Optional[str] = None,
-    refresh_every: int = 50,
-    existing_data: Optional[List[Any]] = None, # Data to check for SKIPPING
-    **extra_params
-) -> List[Any]:
+# --- ENGINE ---
+async def process_list_incremental(items, checker_func, ws, col_mappings, init_url=None, refresh_every=50, existing_data=None, **extra_params):
     total = len(items)
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    pb = st.progress(0)
     st.subheader("🖥️ Console Debug LIVE")
-    debug_console = st.code("Aguardando início...", language="text")
-    
+    console = st.code("Iniciando...", language="text")
     logs = []
-    def log(msg):
-        logs.append(f"> {msg}")
-        debug_console.code("\n".join(logs[-12:])) # Mostra os últimos 12 logs
-    
-    results = ["..."] * total
-    
-    async with async_playwright() as p:
-        browser, context, page = None, None, None
-        async def init_browser():
-            nonlocal browser, context, page
-            log(f"Iniciando browser...")
-            if browser:
-                try: await browser.close()
-                except: pass
-            
-            launch_args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"]
-            try: browser = await p.chromium.launch(headless=True, args=launch_args)
-            except:
-                os.system("playwright install chromium")
-                browser = await p.chromium.launch(headless=True, args=launch_args)
-                
-            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", viewport={"width": 1280, "height": 800})
-            page = await context.new_page()
-            if init_url:
-                try: 
-                    await page.goto(init_url, timeout=60000, wait_until="domcontentloaded")
-                    log(f"Página base carregada: {init_url}")
-                except Exception as e: 
-                    log(f"Aviso ao carregar {init_url}: {str(e)[:50]}")
+    def log(m):
+        logs.append(f"> {m}")
+        console.code("\n".join(logs[-15:]))
 
-        await init_browser()
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--single-process"])
+        context = await browser.new_context(user_agent="Mozilla/5.0 Chrome/120.0.0.0")
+        page = await context.new_page()
         
         for i, val in enumerate(items):
-            # NOVO: Skip Logic Profissional
-            should_skip = False
+            # Skip Logic
             if existing_data and i < len(existing_data):
-                raw_existing = existing_data[i]
-                if isinstance(raw_existing, (list, tuple)):
-                    if len(raw_existing) > 2 and raw_existing[2] in [t("val_correct"), t("val_wrong")]:
-                        should_skip = True
-                elif raw_existing and raw_existing not in ["...", "N/A", ""]:
-                    should_skip = True
-            
-            if should_skip:
-                log(f"Linha {i+2}: Já processada. A saltar para poupar tempo.")
-                results[i] = "SKIP"
-                progress_bar.progress((i + 1) / total)
-                continue
+                raw = existing_data[i]
+                if (isinstance(raw, (list, tuple)) and len(raw) > 2 and raw[2] in [t("val_correct"), t("val_wrong")]) or (raw and raw not in ["...", "N/A", ""]):
+                    log(f"Linha {i+2}: Ignorada."); pb.progress((i+1)/total); continue
 
             if i > 0 and i % refresh_every == 0:
-                log("Refresh periódico do browser...")
-                await init_browser()
-
-            cleaned = normalize_id(val[0] if isinstance(val, (tuple, list)) else val)
-            if not cleaned or cleaned.lower() == "nan":
-                res = "N/A"
-                log(f"ID inválido na linha {i+2}")
+                await context.close(); context = await browser.new_context(); page = await context.new_page()
+            
+            cid = normalize_id(val[0] if isinstance(val, (tuple, list)) else val)
+            if not cid: res = "N/A"
             else:
-                status_text.text(t("status_working", cleaned))
-                log(f"Lendo ID: {cleaned}...")
-                if page.is_closed(): await init_browser()
                 try:
-                    res = await checker_func(page, cleaned if not isinstance(val, (tuple, list)) else val, log_func=log, **extra_params)
-                    log(f"OK -> {res if not isinstance(res, (tuple, list)) else 'Sucesso'}")
+                    res = await checker_func(page, cid if not isinstance(val, (tuple, list)) else val, log_func=log, **extra_params)
                 except Exception as e:
-                    log(f"ERRO NO SCRAPING: {str(e)[:100]}")
-                    res = "siac_error" if col_mappings == [9, 10] else ("Erro", "Erro")
+                    log(f"ERRO: {str(e)[:50]}"); res = "Error"
             
-            results[i] = res
-            
-            # ATUALIZAÇÃO DIRETA NA FOLHA
             if res != "SKIP":
                 try:
-                    row_idx = (i // 2 if col_mappings == [9, 10] else i) + 2
-                    if isinstance(res, (tuple, list)): 
-                        ws.update_cell(row_idx, col_mappings[0], res[0])
-                        if len(res) > 1 and len(col_mappings) > 1:
-                            ws.update_cell(row_idx, col_mappings[1], res[1])
-                        
-                        if col_mappings == [3, 5, 6]: # RNAL Specific
-                            olx_l, rnt_l = str(res[0]).lower(), str(res[1]).lower()
-                            if "sem dados" in rnt_l or not rnt_l or rnt_l == "n/a" or rnt_l == "erro": v = t("val_waiting")
-                            elif olx_l != "n/a" and any(word in rnt_l for word in olx_l.split() if len(word) > 3): v = t("val_correct")
-                            else: v = t("val_wrong")
-                            ws.update_cell(row_idx, col_mappings[2], v)
-                    else: 
-                        val_to_write = t(res) if "siac_" in str(res) else res
-                        target_col = col_mappings[0] if i % 2 == 0 else col_mappings[1] if len(col_mappings) > 1 else col_mappings[0]
-                        ws.update_cell(row_idx, target_col, val_to_write)
-                except Exception as e: 
-                    log(f"Erro ao gravar Sheets: {str(e)[:50]}")
-            
-            progress_bar.progress((i + 1) / total)
-            
-        if browser: await browser.close()
-    return results
+                    row = (i // 2 if col_mappings == [9, 10] else i) + 2
+                    if isinstance(res, (tuple, list)):
+                        ws.update_cell(row, col_mappings[0], res[0])
+                        if len(res) > 1: ws.update_cell(row, col_mappings[1], res[1])
+                        if len(col_mappings) > 2:
+                            o, r = str(res[0]).lower(), str(res[1]).lower()
+                            v = t("val_waiting") if "sem dados" in r or not r else (t("val_correct") if any(w in r for w in o.split() if len(w)>3) else t("val_wrong"))
+                            ws.update_cell(row, col_mappings[2], v)
+                    else:
+                        vw = t(res) if "siac_" in str(res) else res
+                        tc = col_mappings[0] if i % 2 == 0 else col_mappings[1] if len(col_mappings) > 1 else col_mappings[0]
+                        ws.update_cell(row, tc, vw)
+                except: pass
+            pb.progress((i+1)/total)
+        await browser.close()
 
-# --- UI LOGIC ---
+# --- UI ---
 st.title(t("title"))
 st.markdown(t("subtitle"))
+t_siac, t_rnt, t_olx = st.tabs([t("siac_tab"), t("rnal_tab"), t("olx_tab")])
 
-tab_siac, tab_rnt, tab_olx = st.tabs([t("siac_tab"), t("rnal_tab"), t("olx_tab")])
-
-# --- TAB: SIAC ---
-with tab_siac:
-    st.subheader(t("siac_sub"))
+with t_siac:
     st.info(t("dica_siac"))
+    if st.button(t("btn_start"), key="run_siac"):
+        gc = get_gspread_client()
+        if gc:
+            sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO SIAC")
+            if ws:
+                f, c = ws.col_values(7)[1:], ws.col_values(8)[1:]
+                rf, rc = ws.col_values(9)[1:], ws.col_values(10)[1:]
+                items, exists = [], []
+                for i in range(max(len(f), len(c))):
+                    if i < len(f): items.append(f[i]); exists.append(rf[i] if i < len(rf) else "...")
+                    if i < len(c): items.append(c[i]); exists.append(rc[i] if i < len(rc) else "...")
+                asyncio.run(process_list_incremental(items, check_siac_on_page, ws, [9, 10], existing_data=exists))
+                st.success(t("status_done"))
 
-    if st.button(t("btn_start"), key="btn_run_siac"):
-        if not url_gs: st.warning(t("err_no_url"))
-        else:
-            gc = get_gspread_client()
-            if gc:
-                try:
-                    sh = gc.open_by_url(url_gs)
-                    ws = get_worksheet_by_name(sh, "AUTO SIAC")
-                    if not ws:
-                        st.error("ERRO: Aba 'AUTO SIAC' não encontrada no ficheiro!")
-                        st.stop()
-                    femeas = ws.col_values(7)[1:] # G
-                    crias = ws.col_values(8)[1:]  # H
-                    res_femeas = ws.col_values(9)[1:] # I
-                    res_crias = ws.col_values(10)[1:] # J
-                    
-                    rows = max(len(femeas), len(crias))
-                    interleaved = []
-                    existing_results = []
-                    
-                    for i in range(rows):
-                        # Femea
-                        if i < len(femeas): 
-                            interleaved.append(femeas[i])
-                            existing_results.append(res_femeas[i] if i < len(res_femeas) else "...")
-                        # Cria
-                        if i < len(crias): 
-                            interleaved.append(crias[i])
-                            existing_results.append(res_crias[i] if i < len(res_crias) else "...")
-                    
-                    with st.spinner(""):
-                        asyncio.run(process_list_incremental(
-                            interleaved, 
-                            check_siac_on_page, 
-                            ws=ws, 
-                            col_mappings=[9, 10], 
-                            init_url=SIAC_URL,
-                            existing_data=existing_results
-                        ))
-                    st.success(t("status_done"))
-                except Exception as e: st.error(f"Erro: {e}")
-
-    # --- BUTTON: CLEAR SIAC ---
-    if st.button(t("btn_clear_reg"), key="btns_clear_siac"):
-        if not url_gs: st.warning(t("err_no_url"))
-        else:
-            try:
-                gc = get_gspread_client()
-                if gc:
-                    sh = gc.open_by_url(url_gs)
-                    ws = get_worksheet_by_name(sh, "AUTO SIAC")
-                    with st.spinner(t("cleaning")):
-                        data = ws.get_all_values()
-                        def is_siac_done(row):
-                            if len(row) < 10: return False
-                            # Exact match only, no alerts. Supports both PT and EN.
-                            res_i = row[8].strip()
-                            res_j = row[9].strip()
-                            reg_labels = ["✅ REGISTADO", "✅ Registered"]
-                            return res_i in reg_labels and res_j in reg_labels
-                        
-                        count = batch_clear_rows(ws, data, is_siac_done)
-                        if count > 0: st.success(t("rows_removed", count))
-                        else: st.info(t("no_rows"))
-            except Exception as e: st.error(f"Erro ao limpar: {e}")
-
-# --- TAB: RNT ---
-with tab_rnt:
-    st.subheader(t("rnal_sub"))
+with t_rnt:
     st.info(t("dica_rnal"))
-    
-    if st.button(t("btn_start"), key="btn_run_rnt"):
-        if not url_gs: st.warning(t("err_no_url"))
-        else:
-            gc = get_gspread_client()
-            if gc:
-                try:
-                    sh = gc.open_by_url(url_gs)
-                    ws = get_worksheet_by_name(sh, "AUTO RNAL")
-                    if not ws:
-                        st.error("ERRO: Aba 'AUTO RNAL' não encontrada no ficheiro!")
-                        st.stop()
-                    olx_ids = ws.col_values(1)[1:] # A
-                    rnal_ids = ws.col_values(4)[1:] # D
-                    existing_olx_loc = ws.col_values(3)[1:] # C
-                    existing_rnal_data = ws.col_values(5)[1:] # E
-                    existing_val = ws.col_values(6)[1:] # F
-                    
-                    # Pad lists
-                    max_len = max(len(olx_ids), len(rnal_ids), len(existing_olx_loc), len(existing_rnal_data), len(existing_val))
-                    olx_ids += [""] * (max_len - len(olx_ids))
-                    rnal_ids += [""] * (max_len - len(rnal_ids))
-                    existing_olx_loc += [""] * (max_len - len(existing_olx_loc))
-                    existing_rnal_data += [""] * (max_len - len(existing_rnal_data))
-                    existing_val += [""] * (max_len - len(existing_val))
-                    
-                    combined_existing = []
-                    for i in range(max_len):
-                        # Results list stores (olx_loc, rnt_data). 
-                        # We use existing_val for skipping.
-                        combined_existing.append([existing_olx_loc[i], existing_rnal_data[i], existing_val[i]])
-                    
-                    async def al_checker(page, ids_tuple, log_func=None):
-                        o_id, r_id = ids_tuple
-                        olx_loc = await check_olx_location(page, normalize_id(o_id), log_func=log_func)
-                        rnt_data = await check_rnt_rnal_only(page, normalize_id(r_id), log_func=log_func)
-                        return (olx_loc, rnt_data)
+    if st.button(t("btn_start"), key="run_rnt"):
+        gc = get_gspread_client()
+        if gc:
+            sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO RNAL")
+            if ws:
+                ads, regs = ws.col_values(1)[1:], ws.col_values(4)[1:]
+                locs_o, locs_r, vals = ws.col_values(3)[1:], ws.col_values(5)[1:], ws.col_values(6)[1:]
+                items, exists = [], []
+                for i in range(len(ads)):
+                    items.append((ads[i], regs[i]))
+                    exists.append((locs_o[i] if i < len(locs_o) else "", locs_r[i] if i < len(locs_r) else "", vals[i] if i < len(vals) else ""))
+                
+                async def al_checker(p, val, log_func):
+                    ad, reg = val
+                    lo = await check_olx_location(p, ad, log_func=log_func)
+                    lr = await check_rnt_rnal_only(p, reg, log_func=log_func)
+                    return lo, lr
 
-                    with st.spinner(""):
-                        combined_ids = list(zip(olx_ids, rnal_ids))
-                        asyncio.run(process_list_incremental(
-                            combined_ids, 
-                            al_checker, 
-                            ws=ws, 
-                            col_mappings=[3, 5, 6],
-                            existing_data=combined_existing
-                        ))
-                    st.success(t("status_done"))
-                    st.balloons()
-                except Exception as e: st.error(f"Erro: {e}")
+                asyncio.run(process_list_incremental(items, al_checker, ws, [3, 5, 6], existing_data=exists))
+                st.success(t("status_done"))
 
-    # --- BUTTON: CLEAR RNAL ---
-    if st.button(t("btn_clear_loc"), key="btn_clear_rnal"):
-        if not url_gs: st.warning(t("err_no_url"))
-        else:
-            try:
-                gc = get_gspread_client()
-                if gc:
-                    sh = gc.open_by_url(url_gs)
-                    ws = get_worksheet_by_name(sh, "AUTO RNAL")
-                    with st.spinner(t("cleaning")):
-                        data = ws.get_all_values()
-                        def is_rnal_done(row):
-                            if len(row) < 6: return False
-                            return row[5].strip() == t("val_correct")
-                        
-                        count = batch_clear_rows(ws, data, is_rnal_done)
-                        if count > 0: st.success(t("rows_removed", count))
-                        else: st.info(t("no_rows"))
-            except Exception as e: st.error(f"Erro ao limpar: {e}")
-
-# --- TAB: OLX ---
-with tab_olx:
-    st.subheader(t("olx_sub"))
+with t_olx:
     st.info(t("dica_olx"))
-    
-    if st.button(t("btn_start"), key="btn_run_olx"):
-        if not url_gs: st.warning(t("err_no_url"))
-        else:
-            gc = get_gspread_client()
-            if gc:
-                try:
-                    sh = gc.open_by_url(url_gs)
-                    ws = get_worksheet_by_name(sh, "Auto Km")
-                    if not ws:
-                        st.error("ERRO: Aba 'Auto Km' não encontrada no ficheiro!")
-                        st.stop()
-                    ids = ws.col_values(1)[1:] # Column A
-                    system_km = ws.col_values(3)[1:] # Col C (User provided)
-                    existing_km = ws.col_values(4)[1:] # Col D (Scraped KM)
-                    existing_val = ws.col_values(5)[1:] # Col E (Validation)
-                    
-                    # Pad lists to ensure same length
-                    max_len = max(len(ids), len(system_km))
-                    ids += [""] * (max_len - len(ids))
-                    system_km += [""] * (max_len - len(system_km))
-                    
-                    async def cars_checker(page, id_val_tuple, log_func=None):
-                        ad_id, sys_km_raw = id_val_tuple
-                        found_km_str = await check_olx_km(page, ad_id, log_func=log_func)
-                        
-                        sys_km = str(sys_km_raw).replace(' ', '').replace('.', '').replace(',', '').strip()
-                        found_km_clean = found_km_str.replace('km', '').replace(' ', '').replace('.', '').replace(',', '').strip().lower()
-                        
-                        validation = "..."
-                        if sys_km: sys_km_clean = "".join(filter(str.isdigit, str(sys_km)))
-                        else: sys_km_clean = ""
-
-                        if found_km_str == "ERR_MODERATED":
-                            found_km_str = t("km_moderated")
-                            validation = found_km_str
-                        elif found_km_str in ["ERR_INACTIVE", "🚫 Inativo/Vendido"]:
-                            found_km_str = t("km_inactive")
-                            validation = found_km_str
-                        elif found_km_str == "ERR_NOT_FOUND":
-                            found_km_str = "❓ Km não encontrado"
-                            validation = t("km_missing_param")
-                        
-                        if validation == "...": 
-                            if found_km_str != "...":
-                                found_km_clean = "".join(filter(str.isdigit, found_km_str))
-                                if found_km_clean:
-                                    if len(found_km_clean) >= 6: validation = t("km_fixed")
-                                    elif len(found_km_clean) < 5: validation = t("km_wrong")
-                                    else:
-                                        if sys_km_clean and sys_km_clean in found_km_clean: validation = t("km_wrong")
-                                        else: validation = t("km_fixed")
-                        
-                        return (found_km_str, validation)
-
-                    with st.spinner(""):
-                        combined = list(zip(ids, system_km))
-                        # Load existing results for SKIP logic
-                        combined_existing = []
-                        for i in range(len(ids)):
-                            # Check column E (Validation)
-                            v = existing_val[i] if i < len(existing_val) else ""
-                            combined_existing.append(v)
-
-                        asyncio.run(process_list_incremental(
-                            combined, 
-                            cars_checker, 
-                            ws=ws, 
-                            col_mappings=[4, 5],
-                            existing_data=combined_existing
-                        ))
-                    st.success(t("status_done"))
-                    st.balloons()
-                except Exception as e: st.error(f"Erro: {e}")
-
-    # --- BUTTON: CLEAR OLX ---
-    if st.button(t("btn_clear_mod"), key="btn_clear_olx"):
-        if not url_gs: st.warning(t("err_no_url"))
-        else:
-            try:
-                gc = get_gspread_client()
-                if gc:
-                    sh = gc.open_by_url(url_gs)
-                    ws = get_worksheet_by_name(sh, "Auto Km")
-                    with st.spinner(t("cleaning")):
-                        data = ws.get_all_values()
-                        def is_olx_cleanup(row):
-                            if len(row) < 5: return False
-                            status = row[4].strip() # Col E
-                            return any(msg in status for msg in [
-                                "⚠️ Anúncio já foi moderado ⚠️", 
-                                "⚠️ Anúncio inactivo ⚠️",
-                                "⚠️ Ad Already Moderated ⚠️",
-                                "⚠️ Ad Inactive ⚠️",
-                                "✅ KM corrigidos pelo user ✅",
-                                "✅ Kilometers corrected by user ✅"
-                            ])
-                        
-                        count = batch_clear_rows(ws, data, is_olx_cleanup)
-                        if count > 0: st.success(t("rows_removed", count))
-                        else: st.info(t("no_rows"))
-            except Exception as e: st.error(f"Erro ao limpar: {e}")
-
-st.divider()
-
-st.caption(t("footer"))
+    if st.button(t("btn_start"), key="run_olx"):
+        gc = get_gspread_client()
+        if gc:
+            sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "KM CARROS")
+            if ws:
+                ads = ws.col_values(1)[1:]
+                kms, vals = ws.col_values(4)[1:], ws.col_values(5)[1:]
+                items, exists = [], []
+                for i in range(len(ads)):
+                    items.append(ads[i])
+                    exists.append((kms[i] if i < len(kms) else "", "", vals[i] if i < len(vals) else ""))
+                asyncio.run(process_list_incremental(items, check_olx_km, ws, [4, 5], existing_data=exists))
+                st.success(t("status_done"))
