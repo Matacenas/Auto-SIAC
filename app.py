@@ -228,40 +228,35 @@ async def check_siac_on_page(page, microchip: str, log_func: Callable = None) ->
             await page.keyboard.press("Enter")
             log(f"Consultando chip {chip}...")
             
-            # Polling for result (Surgical targeting with chip-sync check)
+            # Polling for result (Resilient & Sequential)
             start = time.time()
             tried_click = False
-            while time.time() - start < 40:
+            while time.time() - start < 50:
                 res = await page.evaluate(f"""() => {{
-                    const bodyText = document.body.innerText;
                     const clean = (s) => s.normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
-                    const tc = clean(bodyText);
+                    const text = document.body.innerText;
+                    const tc = clean(text);
                     
-                    // IF we see "Não foram encontrados resultados", return sem registo
-                    if (tc.includes("nao foram encontrados resultados") || tc.includes("nao existe nenhum animal")) return "siac_not_registered";
+                    // IF the chip isn't even in the page, it hasn't loaded or it's a blank search
+                    if (!tc.includes("{chip[:10]}")) return "polling";
                     
-                    // Conclusive boxes (SIAC uses specific alert classes usually)
-                    const hasResultBox = document.querySelector('.alert-success, .alert-danger, .alert-warning, .card-body');
-                    if (!hasResultBox && !tc.includes("resultado")) return "polling";
-
-                    // Result logic
+                    if (tc.includes("não foram encontrados resultados") || tc.includes("nao existe nenhum animal") || tc.includes("sem registo")) return "siac_not_registered";
                     if (tc.includes("encontra desaparecido") || tc.includes("animal desaparecido")) return "siac_missing";
-                    if (tc.includes("com registo") || tc.includes("animal com registo")) return "siac_registered";
-                    if (tc.includes("sem registo") || tc.includes("animal sem registo")) return "siac_not_registered";
+                    if (tc.includes("com registo") || tc.includes("registado no siac")) return "siac_registered";
                     
                     return "polling";
                 }}""")
                 
                 if res != "polling": 
-                    log(f"Resultado final detectado: {res}")
+                    log(f"Encontrado: {res}")
                     return res
                 
-                if time.time() - start > 12 and not tried_click:
-                    log("Ainda sem resposta... forçando clique novamente.")
+                if time.time() - start > 15 and not tried_click:
+                    log("A tentar forçar submissão...")
                     await page.keyboard.press("Enter")
                     tried_click = True
                 await asyncio.sleep(2)
-            log("Timeout no portal SIAC (40s).")
+            log("Timeout no portal SIAC (50s atingidos).")
             return "siac_error"
         except Exception as e:
             log(f"Erro: {str(e)[:50]}")
@@ -326,42 +321,33 @@ async def check_rnt_rnal_only(page, reg_id: str, log_func: Callable = None) -> s
         for target in elements:
             try:
                 morada = await target.evaluate("""() => {
-                    const findValue = (label) => {
-                        const all = Array.from(document.querySelectorAll('.TableRecords_Label, td, span, div, b'));
-                        const l = all.find(el => {
-                            const t = el.innerText.trim();
-                            // STRICT match for "Morada" only, excluding emails or other labels
-                            return (t === label || t === label + ':') && 
-                                   !el.innerText.toLowerCase().includes('email') &&
-                                   !el.innerText.toLowerCase().includes('electronico');
-                        });
-                        if (!l) return null;
-                        
-                        // Check if it's a table with value in next TD
+                    const all = Array.from(document.querySelectorAll('.TableRecords_Label, td, span, b, div'));
+                    const l = all.find(el => el.innerText.trim() === 'Morada' || el.innerText.trim() === 'Morada:');
+                    if (l) {
+                        // Priority 1: Next TD sibling
                         if (l.tagName === 'TD' && l.nextElementSibling) {
-                             const val = l.nextElementSibling.innerText.trim();
-                             if (val.includes('@') && !val.includes(' ')) return null; // Skip if looks like email
-                             return val;
+                            const v = l.nextElementSibling.innerText.trim();
+                            if (v.length > 5 && !v.includes('@')) return v;
                         }
-                        
-                        // Case: Morada: Value in same block
+                        // Priority 2: Parent inner text (label: value)
                         const pText = l.parentElement.innerText;
-                        const match = pText.match(new RegExp(label + ":?\\\\s*([^\\\\n@]+)", "i"));
-                        if (match && match[1].trim().length > 5) return match[1].trim();
+                        const match = pText.match(/Morada:?\s*(.*)/i);
+                        if (match && match[1].trim().length > 5 && !match[1].includes('@')) return match[1].trim();
                         
-                        return null;
-                    };
-                    
-                    const m = findValue('Morada');
-                    if (m && m.length > 5 && (m.includes(' ') || !m.includes('@'))) return m;
+                        // Priority 3: Any sibling in flow
+                        let next = l.nextElementSibling || l.parentElement.nextElementSibling;
+                        if (next && next.innerText.length > 5 && !next.innerText.includes('@')) return next.innerText.trim();
+                    }
                     return null;
                 }""")
                 if morada: 
-                    log(f"Morada encontrada: {morada[:50]}...")
+                    log(f"Encontrado RNT: {morada[:40]}")
                     return morada.strip()
             except: continue
         return "❓ Sem Dados"
-    except: return "⚠️ Erro RNT"
+    except Exception as e: 
+        log(f"Erro RNT: {str(e)[:40]}")
+        return "⚠️ Erro RNET"
 
 # --- BROWSER INSTALLER ---
 def install_playwright_browsers():
@@ -551,30 +537,34 @@ with t_olx:
     col_o1, col_o2 = st.columns(2)
     with col_o1:
         if st.button(t("btn_start"), key="run_olx", use_container_width=True):
-            gc = get_gspread_client()
-            if gc:
-                sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "KM CARROS")
-                if ws:
-                    ads = ws.col_values(1)[1:]; kms = ws.col_values(4)[1:]; v = ws.col_values(5)[1:]
-                    items, exists = [], []
-                    for i in range(len(ads)):
-                        items.append(ads[i])
-                        exists.append((kms[i] if i<len(kms) else "", "", v[i] if i<len(v) else ""))
-                    asyncio.run(process_list_incremental(items, check_olx_km, ws, [4, 5], existing_data=exists))
-                    st.success(t("status_done"))
+            if not url_gs: st.error(t("err_no_url"))
+            else:
+                gc = get_gspread_client()
+                if gc:
+                    with st.spinner("⏳ A carregar dados do Sheets..."):
+                        try:
+                            sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "KM CARROS")
+                            if ws:
+                                ads = ws.col_values(1)[1:]; kms = ws.col_values(4)[1:]; v = ws.col_values(5)[1:]
+                                items, exists = [], []
+                                for i in range(len(ads)):
+                                    items.append(ads[i])
+                                    exists.append((kms[i] if i<len(kms) else "", "", v[i] if i<len(v) else ""))
+                                asyncio.run(process_list_incremental(items, check_olx_km, ws, [4, 5], existing_data=exists))
+                                st.success(t("status_done"))
+                            else: st.error(t("err_no_sheet", "KM CARROS"))
+                        except Exception as e: st.error(f"Erro: {e}")
     with col_o2:
         if st.button(t("btn_clear_mod"), key="clear_olx", use_container_width=True):
-            st.info(t("cleaning"))
-            gc = get_gspread_client()
-            if gc:
-                sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "KM CARROS")
-                if ws:
-                    vals = ws.get_all_values()
-                    count = 0
-                    # Iterate backwards to avoid index shifting
-                    for i in range(len(vals) - 1, 0, -1):
-                        row = vals[i]
-                        if len(row) >= 5 and (row[4] == t("km_fixed") or row[4] == t("km_moderated") or row[4] == t("km_inactive")):
-                            ws.delete_rows(i + 1)
-                            count += 1
-                    st.success(t("rows_removed", count))
+            with st.spinner(t("cleaning")):
+                gc = get_gspread_client()
+                if gc:
+                    sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "KM CARROS")
+                    if ws:
+                        vals = ws.get_all_values()
+                        count = 0
+                        for i in range(len(vals) - 1, 0, -1):
+                            row = vals[i]
+                            if len(row) >= 5 and (row[4] == t("km_fixed") or row[4] == t("km_moderated") or row[4] == t("km_inactive")):
+                                ws.delete_rows(i + 1); count += 1
+                        st.success(t("rows_removed", count))
