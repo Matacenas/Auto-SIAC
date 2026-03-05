@@ -30,6 +30,7 @@ def save_link(key, url):
 
 SIAC_URL = "https://www.siac.pt/pt"
 OLX_BASE_URL = "https://www.olx.pt/"
+# Link Directo RNAL (Corrigido para o formato exacto do portal)
 RNT_AL_DIRECT_URL = "https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr="
 RNT_ET_URL = "https://rnt.turismodeportugal.pt/RNT/Pesquisa_ET.aspx"
 
@@ -258,22 +259,38 @@ def batch_clear_rows(ws, rows, condition_func):
 import time
 
 async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
-    """Valida um microchip no SIAC.pt usando a lógica comprovada do script de verificação."""
-    # Limpeza rigorosa do chip
+    """Valida um microchip no SIAC.pt com otimização extrema de memória."""
     chip = str(microchip).strip().split('.')[0].split(',')[0]
     if not chip or len(chip) < 10:
         return "❓ Formato Inválido"
 
+    # Bloquear recursos pesados para economizar RAM e evitar crashes
+    async def block_resources(route):
+        if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
+            await route.abort()
+        else:
+            await route.continue_()
+    
+    try: await page.route("**/*", block_resources)
+    except: pass
+
     for attempt in range(retries + 1):
         try:
             if SIAC_URL not in page.url:
-                await page.goto(SIAC_URL, timeout=60000, wait_until="load")
+                await page.goto(SIAC_URL, timeout=60000, wait_until="domcontentloaded")
 
-            # Aguarda o splash screen (tempo de segurança)
-            await asyncio.sleep(4)
+            # Aguarda o splash/loading inicial
+            await asyncio.sleep(5)
 
-            # Encontra e foca o campo via JS Evaluate para máxima compatibilidade
-            focused = await page.evaluate("""
+            # Tenta encontrar o campo em TODOS os frames (caso tenha voltado para iframe)
+            target_frame = page
+            # Verifica se existe algum iframe de pesquisa
+            for frame in page.frames:
+                if "siac" in frame.url.lower():
+                    target_frame = frame
+                    break
+
+            focused = await target_frame.evaluate("""
                 () => {
                     const inputs = Array.from(document.querySelectorAll('input'));
                     const target = inputs.find(i => i.placeholder && (i.placeholder.includes('transponder') || i.placeholder.includes('0 |')))
@@ -282,6 +299,7 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
                     if (target) {
                         target.value = '';
                         target.focus();
+                        target.click();
                         return true;
                     }
                     return false;
@@ -289,15 +307,20 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
             """)
 
             if not focused:
-                raise Exception("Input não encontrado")
+                # Fallback: tenta preencher pelo seletor genérico mais comum
+                try:
+                    await target_frame.fill("input[placeholder*='0 |']", chip, timeout=5000)
+                    focused = True
+                except: pass
 
-            # Digitação simulada (método que funcionou no script)
-            await page.keyboard.type(chip, delay=40)
+            if not focused:
+                raise Exception("Campo não localizado")
+
+            await page.keyboard.type(chip, delay=50)
             
-            # Polling para detectar a resposta automática do site
             start_poll = time.time()
             while time.time() - start_poll < 12:
-                content = await page.content()
+                content = await target_frame.content()
                 if SIAC_TEXT_MISSING in content:        return "siac_missing"
                 if SIAC_TEXT_REGISTERED in content:     return "siac_registered"
                 if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
@@ -305,16 +328,14 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
 
             if attempt < retries:
                 await page.reload()
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 continue
                 
             return "siac_unknown"
             
         except Exception:
             if attempt < retries:
-                try: await page.goto(SIAC_URL, timeout=60000)
-                except: pass
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 continue
             return "⚠️ Erro SIAC"
     return "⚠️ Erro SIAC"
@@ -461,66 +482,88 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
     return "⚠️ Erro OLX"
 
 async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
-    """Valida um Alojamento Local no RNAL usando a lógica DOM-based que funcionou no script."""
+    """Valida um Alojamento Local no RNAL com busca em multi-frames e seletores RNT."""
     res = "❓ Sem Dados"
     clean_id = str(reg_id).strip().split('.')[0]
     rnal_url = f"{RNT_AL_DIRECT_URL}{clean_id}"
     
+    # Bloqueio de recursos para RNAL também (economiza RAM)
+    try:
+        await page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font"] else route.continue_())
+    except: pass
+
     for attempt in range(retries + 1):
         try:
-            await page.goto(rnal_url, timeout=45000, wait_until="networkidle")
-            await asyncio.sleep(5) 
+            await page.goto(rnal_url, timeout=60000, wait_until="networkidle")
+            await asyncio.sleep(6) 
             
-            content = await page.content()
-            if "não foram encontrados" in content.lower():
-                return "❌ Não Encontrado"
+            # Procura o conteúdo em todos os frames (importante para sites RNT/ASPX)
+            target_data = None
+            for frame in page.frames:
+                try:
+                    target_data = await frame.evaluate("""
+                        () => {
+                            const findValue = (label) => {
+                                const all = Array.from(document.querySelectorAll('span, td, div, b, label, th, input'));
+                                const target = all.find(el => {
+                                    const t = el.innerText || el.value || "";
+                                    const trimT = t.trim().toUpperCase();
+                                    return trimT === label.toUpperCase() || trimT === label.toUpperCase() + ":";
+                                });
+                                
+                                if (target) {
+                                    let next = target.nextElementSibling;
+                                    if (next && next.innerText && next.innerText.trim().length > 2) return next.innerText.trim();
+                                    
+                                    if (target.tagName === 'TD' || target.tagName === 'TH') {
+                                        let row = target.closest('tr');
+                                        if (row && row.cells.length > 1) {
+                                            for(let i=0; i < row.cells.length; i++) {
+                                                if (row.cells[i] === target && i+1 < row.cells.length) {
+                                                    return row.cells[i+1].innerText.trim();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    const parentText = target.parentElement ? target.parentElement.innerText : "";
+                                    const val = parentText.replace(new RegExp(label + ":?", "i"), "").trim();
+                                    if (val.length > 2) return val;
+                                }
+                                return "";
+                            };
 
-            # Estratégia de extração via DOM (mais fiável que regex para este site)
-            data = await page.evaluate("""
-                () => {
-                    const findValue = (label) => {
-                        const all = Array.from(document.querySelectorAll('span, td, div, b, label'));
-                        const target = all.find(el => {
-                            const t = el.innerText ? el.innerText.trim().toUpperCase() : "";
-                            return t === label.toUpperCase() || t === label.toUpperCase() + ":";
-                        });
-                        
-                        if (target) {
-                            const next = target.nextElementSibling;
-                            if (next && next.innerText.trim().length > 1) return next.innerText.trim();
+                            const morada = findValue('Morada') || findValue('Designação da via') || findValue('Localização') || findValue('Endereço');
+                            const concelho = findValue('Concelho');
+                            const freguesia = findValue('Freguesia');
                             
-                            const parentText = target.parentElement ? target.parentElement.innerText : "";
-                            const val = parentText.replace(new RegExp(label + ":?", "i"), "").trim();
-                            if (val.length > 1) return val;
+                            if (morada || concelho || freguesia) {
+                                let full = morada || "";
+                                if (freguesia && !full.toUpperCase().includes(freguesia.toUpperCase())) full += (full ? " - " : "") + freguesia;
+                                if (concelho && !full.toUpperCase().includes(concelho.toUpperCase())) full += (full ? " (" : "") + concelho + (full.includes("(") ? "" : ")");
+                                return full.trim();
+                            }
+                            return null;
                         }
-                        return "";
-                    };
+                    """)
+                    if target_data: break
+                except: continue
 
-                    const morada = findValue('Morada') || findValue('Designação da via') || findValue('Localização');
-                    const concelho = findValue('Concelho');
-                    const freguesia = findValue('Freguesia');
-                    
-                    if (morada || concelho || freguesia) {
-                        let full = morada || "";
-                        if (freguesia && !full.includes(freguesia)) full += (full ? " - " : "") + freguesia;
-                        if (concelho && !full.includes(concelho)) full += (full ? " (" : "") + concelho + (full.includes("(") ? "" : ")");
-                        return full.trim();
-                    }
-                    return null;
-                }
-            """)
-            
-            if data and len(data) > 3:
-                return data
+            if target_data and len(target_data) > 3:
+                return target_data
 
             if attempt < retries:
                 await page.reload()
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 continue
+            
+            # Log de debug se falhar
+            content = await page.content()
+            with open("rnal_debug_log.txt", "a", encoding="utf-8") as f:
+                f.write(f"\n[{time.ctime()}] ID: {clean_id} - URL: {page.url} - TEXT: {content[:500].replace('\\n', ' ')}")
                 
         except Exception:
             if attempt < retries:
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 continue
             return f"⚠️ Erro RNAL"
             
@@ -550,12 +593,22 @@ async def process_list_incremental(
                 try: await browser.close()
                 except: pass
             
-            # Lançamento ultra-puro (Sem flags que causem conflitos de memória/crash)
+            # Lançamento otimizado para Streamlit Cloud (Baixa RAM)
+            launch_args = [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--no-first-run",
+                "--no-zygote",
+                "--single-process" # Fundamental para economizar RAM em ambientes containerizados
+            ]
+            
             try:
-                browser = await p.chromium.launch(headless=True)
+                browser = await p.chromium.launch(headless=True, args=launch_args)
             except Exception:
                 os.system("playwright install chromium")
-                browser = await p.chromium.launch(headless=True)
+                browser = await p.chromium.launch(headless=True, args=launch_args)
                 
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
