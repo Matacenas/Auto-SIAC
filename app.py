@@ -257,81 +257,52 @@ def batch_clear_rows(ws, rows, condition_func):
 
 import time
 
-async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
-    """Validates a microchip on SIAC.pt using the fastest, most direct method.
+async def check_siac_on_page(page, microchip: str, retries: int = 2) -> str:
+    """Valida um microchip no SIAC.pt usando o método mais simples e direto.
     
-    Per user instruction: entering the number automatically triggers validation 
-    without needing to press Enter or click a button. We simply focus the field 
-    via JS, type the number via hardware events (required by Angular), and poll 
-    the DOM for the result text.
+    Seguindo o feedback do utilizador:
+    1. Espera o splash screen (2.5s).
+    2. Faz 'copy-paste' (fill()) no campo.
+    3. Aguarda que o resultado apareça automaticamente (sem cliques ou Enter).
     """
     chip = str(microchip).strip()
     for attempt in range(retries + 1):
         try:
-            # Step 1: Navigate to SIAC if not already there.
+            # Garante que estamos na página correta
             if SIAC_URL not in page.url:
                 try:
                     await page.goto(SIAC_URL, timeout=60000, wait_until="load")
                 except Exception:
                     pass
 
-            # Step 2: Minimal wait for Angular to bootstrap and the splash to start fading.
+            # Tempo para o splash screen desaparecer e o Angular estabilizar
             await asyncio.sleep(2.5)
 
-            # Step 3: Find the frame and focus the input directly via JS.
-            target_frame = page
-            for f in page.frames:
-                try:
-                    if await f.evaluate("() => document.querySelectorAll('input').length") > 0:
-                        target_frame = f
-                        break
-                except Exception:
-                    continue
-
-            focused = await target_frame.evaluate("""
-                () => {
-                    const inps = Array.from(document.querySelectorAll('input'));
-                    const inp = inps.find(i => i.placeholder && i.placeholder.includes('0 |')) 
-                             || inps.find(i => i.type === 'text') 
-                             || inps[0];
-                    if (inp) {
-                        inp.value = ''; // clear first
-                        inp.focus();
-                        return true;
-                    }
-                    return false;
-                }
-            """)
-
-            if not focused:
-                raise Exception("No input found")
-
-            # Step 4: Type the number quickly but physically.
-            # Angular's auto-search triggers automatically when 15 chars are detected.
-            await page.keyboard.type(chip, delay=30)
-
-            # Step 5: Fast polling loop for the result (max 10 seconds).
-            # This returns instantly the moment the success text appears, making it very fast.
-            start_time = time.time()
-            while time.time() - start_time < 10:
-                content = await target_frame.content()
+            # Localiza o input usando o placeholder visto nas imagens
+            input_selector = 'input[placeholder*="transponder"], input[placeholder*="0 |"], input[type="text"]'
+            
+            # Preenche o campo (equivale ao copy-pasting)
+            await page.locator(input_selector).first.fill(chip)
+            
+            # Aguarda a mensagem de validação aparecer (máximo 8 segundos)
+            # O SIAC valida automaticamente ao preencher 15 dígitos
+            start_poll = asyncio.get_event_loop().time()
+            while asyncio.get_event_loop().time() - start_poll < 8:
+                content = await page.content()
                 if SIAC_TEXT_MISSING in content:        return "siac_missing"
                 if SIAC_TEXT_REGISTERED in content:     return "siac_registered"
                 if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
                 await asyncio.sleep(0.5)
 
-            # If polling times out, try reloading for the next attempt
+            # Se não encontrou nada, tenta recarregar na próxima tentativa
             if attempt < retries:
-                try: await page.goto(SIAC_URL, timeout=60000, wait_until="load")
-                except Exception: pass
+                await page.reload()
                 continue
-            
+                
             return "siac_unknown"
             
         except Exception:
             if attempt < retries:
-                try: await page.goto(SIAC_URL, timeout=60000, wait_until="load")
-                except Exception: pass
                 await asyncio.sleep(2)
                 continue
             return "⚠️ Erro SIAC"
