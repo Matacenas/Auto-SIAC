@@ -260,7 +260,11 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
     for attempt in range(retries + 1):
         try:
             if SIAC_URL not in page.url:
-                await page.goto(SIAC_URL, timeout=60000, wait_until="networkidle")
+                await page.goto(SIAC_URL, timeout=60000, wait_until="domcontentloaded")
+                try:
+                    await page.wait_for_selector("input", timeout=15000)
+                except:
+                    pass
 
             await page.evaluate("""
                 () => {
@@ -433,7 +437,7 @@ async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
     rnal_url = f"{RNT_AL_DIRECT_URL}{reg_id}"
     for attempt in range(retries + 1):
         try:
-            await page.goto(rnal_url, timeout=45000, wait_until="networkidle")
+            await page.goto(rnal_url, timeout=45000, wait_until="domcontentloaded")
             await asyncio.sleep(3) # Give it time to load the record
             
             # Try Detail Page Strategy first
@@ -522,13 +526,14 @@ async def process_list_incremental(
         async def init_browser():
             nonlocal browser, context, page
             if browser: await browser.close()
-            try: browser = await p.chromium.launch(headless=True)
+            launch_args = ["--disable-dev-shm-usage", "--disable-gpu", "--no-sandbox", "--disable-extensions"]
+            try: browser = await p.chromium.launch(headless=True, args=launch_args)
             except:
                 os.system("playwright install chromium")
-                browser = await p.chromium.launch(headless=True)
+                browser = await p.chromium.launch(headless=True, args=launch_args)
             context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             page = await context.new_page()
-            if init_url: await page.goto(init_url, timeout=60000, wait_until="networkidle")
+            if init_url: await page.goto(init_url, timeout=60000, wait_until="domcontentloaded")
 
         await init_browser()
         total = len(items)
