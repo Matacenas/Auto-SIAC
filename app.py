@@ -136,30 +136,33 @@ def t(key, *args):
 
 st.set_page_config(page_title="Validação Automática", page_icon="🚀", layout="wide")
 
-# --- CUSTOM CSS ---
+# --- CUSTOM CSS (PREMIUM RESTORED) ---
 st.markdown("""
 <style>
-[data-testid="stSidebar"] { min-width: 280px; max-width: 320px; }
-div[data-baseweb="tab-list"] { width: 500px !important; }
-div[data-baseweb="tab-border"] { width: 500px !important; }
-hr { width: 500px !important; margin-left: 0 !important; }
-[data-testid="stNotification"] { width: 500px !important; }
-.stAlert { width: 500px !important; }
-button[data-baseweb="tab"] p { font-size: 24px !important; font-weight: bold; }
+    [data-testid="stSidebar"] { min-width: 300px; max-width: 350px; }
+    [data-testid="stNotification"] { width: 500px !important; border-radius: 10px; }
+    .stAlert { width: 500px !important; border-radius: 10px; padding: 10px 20px; }
+    button[data-baseweb="tab"] { font-size: 24px !important; height: 60px !important; font-weight: bold !important; }
+    button[data-baseweb="tab"] p { font-size: 24px !important; }
+    div[data-baseweb="tab-list"] { width: 500px !important; }
+    div[data-baseweb="tab-border"] { width: 500px !important; }
+    hr { width: 500px !important; margin-left: 0 !important; border-top: 2px solid #555; }
+    .flag-container { display: flex; align-items: center; justify-content: center; height: 38px; }
+    .flag-img { height: 26px; border-radius: 2px; box-shadow: 0 0 2px rgba(0,0,0,0.5); }
 </style>
 """, unsafe_allow_html=True)
 
-# --- SIDEBAR ---
+# --- SIDEBAR (LAYOUT RESTORED) ---
 with st.sidebar:
     st.header(t("sidebar_config"))
-    c1, c2 = st.columns([1, 4])
-    with c1: st.markdown("<img src='https://flagcdn.com/w80/pt.png' style='height: 20px;'>", unsafe_allow_html=True)
-    with c2: 
-        if st.button("Português", key="pt"): st.session_state.lang = "PT"; st.rerun()
-    c3, c4 = st.columns([1, 4])
-    with c3: st.markdown("<img src='https://flagcdn.com/w80/gb.png' style='height: 20px;'>", unsafe_allow_html=True)
-    with c4:
-        if st.button("English", key="en"): st.session_state.lang = "EN"; st.rerun()
+    cp1, cp2 = st.columns([1, 4])
+    with cp1: st.markdown("<div class='flag-container'><img class='flag-img' src='https://flagcdn.com/w80/pt.png'></div>", unsafe_allow_html=True)
+    with cp2: 
+        if st.button("Português", key="btn_pt", use_container_width=True): st.session_state.lang = "PT"; st.rerun()
+    ce1, ce2 = st.columns([1, 4])
+    with ce1: st.markdown("<div class='flag-container'><img class='flag-img' src='https://flagcdn.com/w80/gb.png'></div>", unsafe_allow_html=True)
+    with ce2:
+        if st.button("English", key="btn_en", use_container_width=True): st.session_state.lang = "EN"; st.rerun()
     
     st.divider()
     saved_links = load_links()
@@ -182,7 +185,7 @@ def get_gspread_client():
 def get_worksheet_by_name(sh, target_name):
     try:
         ts = [ws.title for ws in sh.worksheets()]
-        match = next((t for t in ts if t.strip().lower() == target_name.strip().lower()), None)
+        match = next((tt for tt in ts if tt.strip().lower() == target_name.strip().lower()), None)
         return sh.worksheet(match) if match else None
     except: return None
 
@@ -191,12 +194,13 @@ def normalize_id(val: Any) -> str:
     s = str(val).strip()
     if not s or s.lower() == "nan": return ""
     if s.endswith(".0") or s.endswith(",0"): s = s[:-2]
-    if "E+" in s.upper():
+    if "E+" in s.upper() or "E-" in s.upper():
         try: return str(int(float(s.replace(',', '.'))))
         except: pass
-    return s.replace('.', '').replace(',', '') if s.replace('.','').isdigit() and len(s) > 10 else s
+    if s.replace('.', '').replace(',', '').isdigit() and len(s) > 10: return s.replace('.', '').replace(',', '')
+    return s
 
-# --- CHECKERS ---
+# --- CHECKERS (ADVANCED RESTORED) ---
 async def check_siac_on_page(page, microchip: str, log_func: Callable = None) -> str:
     def log(m):
         if log_func: log_func(f"[SIAC] {m}")
@@ -216,20 +220,26 @@ async def check_siac_on_page(page, microchip: str, log_func: Callable = None) ->
                 return false;
             }}""", sel, chip)
             await page.keyboard.press("Enter")
-            log(f"Consultando {chip}...")
-            await asyncio.sleep(5)
+            log(f"Consultando chip {chip}...")
             
-            res = await page.evaluate(f"""() => {{
-                const t = document.body.innerText;
-                if (t.includes("{SIAC_TEXT_MISSING}")) return "siac_missing";
-                if (t.includes("{SIAC_TEXT_REGISTERED}")) return "siac_registered";
-                if (t.includes("{SIAC_TEXT_NOT_REGISTERED}")) return "siac_not_registered";
-                return "polling";
-            }}""")
-            if res != "polling": return res
-            await asyncio.sleep(2)
+            # Polling for result
+            start = time.time()
+            while time.time() - start < 15:
+                res = await page.evaluate(f"""() => {{
+                    const t = document.body.innerText;
+                    if (t.includes("{SIAC_TEXT_MISSING}")) return "siac_missing";
+                    if (t.includes("{SIAC_TEXT_REGISTERED}") || t.includes("com registo no SIAC")) return "siac_registered";
+                    if (t.includes("{SIAC_TEXT_NOT_REGISTERED}") || t.includes("sem registo")) return "siac_not_registered";
+                    return "polling";
+                }}""")
+                if res != "polling": 
+                    log(f"Resultado: {res}")
+                    return res
+                await asyncio.sleep(1)
+            log("Timeout no portal SIAC.")
+            return "siac_error"
         except Exception as e:
-            log(f"Erro: {str(e)[:40]}")
+            log(f"Erro: {str(e)[:50]}")
             if attempt == 0: await page.reload()
     return "siac_error"
 
@@ -239,18 +249,23 @@ async def check_olx_km(page, ad_id: str, log_func: Callable = None) -> str:
     cid = normalize_id(ad_id)
     url = f"{OLX_BASE_URL}{cid}"
     try:
-        log(f"Acedendo {cid}...")
+        log(f"Acedendo anúncio {cid}...")
         await page.goto(url, timeout=45000, wait_until="domcontentloaded")
         await asyncio.sleep(4)
         km = await page.evaluate("""() => {
             const m = document.body.innerText.match(/(\\d[\\d\\s\\.,]*)\\s*km/i);
             return m ? m[0].trim() : null;
         }""")
-        if km: return km
+        if km: 
+            log(f"Encontrado: {km}")
+            return km
         content = (await page.content()).lower()
-        if "não está disponível" in content: return "ERR_MODERATED"
+        if "não está disponível" in content or "moderado" in content: return "ERR_MODERATED"
+        if "inativo" in content or "removido" in content: return "ERR_INACTIVE"
         return "ERR_NOT_FOUND"
-    except: return "⚠️ Erro OLX"
+    except Exception as e: 
+        log(f"Erro: {str(e)[:40]}")
+        return "⚠️ Erro OLX"
 
 async def check_olx_location(page, ad_id: str, log_func: Callable = None) -> str:
     def log(m):
@@ -261,9 +276,14 @@ async def check_olx_location(page, ad_id: str, log_func: Callable = None) -> str
         await page.goto(url, timeout=45000, wait_until="domcontentloaded")
         await asyncio.sleep(4)
         loc = await page.evaluate("""() => {
-            const el = document.querySelector('span[data-testid="location-label"]');
-            return el ? el.innerText.trim() : null;
+            const selectors = ['span[data-testid="location-label"]', 'a[data-testid="ad-location-link"]'];
+            for (let s of selectors) {
+                const el = document.querySelector(s);
+                if (el && el.innerText.length > 3) return el.innerText.trim();
+            }
+            return null;
         }""")
+        if loc: log(f"Localização: {loc}")
         return loc or "❓ Localização"
     except: return "⚠️ Erro OLX"
 
@@ -273,78 +293,104 @@ async def check_rnt_rnal_only(page, reg_id: str, log_func: Callable = None) -> s
     rid = normalize_id(reg_id)
     url = f"{RNT_AL_DIRECT_URL}{rid}"
     try:
+        log(f"Validando no RNT ID {rid}...")
         await page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        await asyncio.sleep(6)
-        morada = await page.evaluate("""() => {
-            const labels = Array.from(document.querySelectorAll('.TableRecords_Label, td'));
-            const l = labels.find(el => el.innerText.includes('Morada'));
-            if (l) {
-                if (l.tagName === 'TD' && l.nextElementSibling) return l.nextElementSibling.innerText.trim();
-                return l.parentElement.innerText.replace('Morada', '').trim();
-            }
-            return null;
-        }""")
-        return morada or "❓ Sem Dados"
+        await asyncio.sleep(8)
+        # Surgical frame extract
+        elements = [page] + page.frames
+        for target in elements:
+            try:
+                morada = await target.evaluate("""() => {
+                    const labels = Array.from(document.querySelectorAll('.TableRecords_Label, td, span'));
+                    const l = labels.find(el => {
+                        const t = el.innerText.trim();
+                        return t === 'Morada' || t === 'Morada:';
+                    });
+                    if (l) {
+                        if (l.classList.contains('TableRecords_Label')) return l.parentElement.innerText.replace(/Morada:?/i, '').trim();
+                        if (l.tagName === 'TD' && l.nextElementSibling) return l.nextElementSibling.innerText.trim();
+                    }
+                    return null;
+                }""")
+                if morada and len(morada) > 5: return morada.strip()
+            except: continue
+        return "❓ Sem Dados"
     except: return "⚠️ Erro RNT"
 
-# --- ENGINE ---
+# --- ENGINE (STABLE RESTORED) ---
 async def process_list_incremental(items, checker_func, ws, col_mappings, init_url=None, refresh_every=50, existing_data=None, **extra_params):
     total = len(items)
     pb = st.progress(0)
     st.subheader("🖥️ Console Debug LIVE")
-    console = st.code("Iniciando...", language="text")
+    console = st.code("Iniciando motor Playwright...", language="text")
     logs = []
     def log(m):
         logs.append(f"> {m}")
         console.code("\n".join(logs[-15:]))
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--single-process"])
-        context = await browser.new_context(user_agent="Mozilla/5.0 Chrome/120.0.0.0")
+        try:
+            browser = await p.chromium.launch(
+                headless=True, 
+                args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--single-process"]
+            )
+        except Exception as e:
+            log(f"Falha ao iniciar Chromium: {str(e)}")
+            st.error("Erro no Playwright. Certifique-se de que os browsers estão instalados.")
+            return []
+
+        context = await browser.new_context(user_agent="Mozilla/5.0 Windows NT 10.0; Win64; x64")
         page = await context.new_page()
         
         for i, val in enumerate(items):
             # Skip Logic
             if existing_data and i < len(existing_data):
                 raw = existing_data[i]
-                if (isinstance(raw, (list, tuple)) and len(raw) > 2 and raw[2] in [t("val_correct"), t("val_wrong")]) or (raw and raw not in ["...", "N/A", ""]):
-                    log(f"Linha {i+2}: Ignorada."); pb.progress((i+1)/total); continue
+                if isinstance(raw, (list, tuple)):
+                    if len(raw) > 2 and raw[2] in [t("val_correct"), t("val_wrong")]:
+                        log(f"Linha {i+2}: Já validada. Saltando."); pb.progress((i+1)/total); continue
+                elif str(raw).strip() not in ["...", "N/A", "", "nan"]:
+                    log(f"Linha {i+2}: Já preenchida. Saltando."); pb.progress((i+1)/total); continue
 
             if i > 0 and i % refresh_every == 0:
+                log("Refresh periódico do contexto...")
                 await context.close(); context = await browser.new_context(); page = await context.new_page()
             
             cid = normalize_id(val[0] if isinstance(val, (tuple, list)) else val)
             if not cid: res = "N/A"
             else:
                 try:
+                    if page.is_closed(): await browser.new_context(); page = await context.new_page()
                     res = await checker_func(page, cid if not isinstance(val, (tuple, list)) else val, log_func=log, **extra_params)
                 except Exception as e:
-                    log(f"ERRO: {str(e)[:50]}"); res = "Error"
+                    log(f"ERRO DE MOTOR: {str(e)[:50]}"); res = "Error"
             
-            if res != "SKIP":
-                try:
-                    row = (i // 2 if col_mappings == [9, 10] else i) + 2
-                    if isinstance(res, (tuple, list)):
-                        ws.update_cell(row, col_mappings[0], res[0])
-                        if len(res) > 1: ws.update_cell(row, col_mappings[1], res[1])
-                        if len(col_mappings) > 2:
-                            o, r = str(res[0]).lower(), str(res[1]).lower()
-                            v = t("val_waiting") if "sem dados" in r or not r else (t("val_correct") if any(w in r for w in o.split() if len(w)>3) else t("val_wrong"))
-                            ws.update_cell(row, col_mappings[2], v)
-                    else:
+            # ATUALIZAÇÃO DIRETA NO SHEETS
+            try:
+                row = (i // 2 if col_mappings == [9, 10] else i) + 2
+                if isinstance(res, (tuple, list)):
+                    ws.update_cell(row, col_mappings[0], res[0])
+                    if len(res) > 1: ws.update_cell(row, col_mappings[1], res[1])
+                    if len(col_mappings) > 2:
+                        o, r = str(res[0]).lower(), str(res[1]).lower()
+                        v = t("val_waiting") if "sem dados" in r or not r else (t("val_correct") if any(w in r for w in o.split() if len(w)>3) else t("val_wrong"))
+                        ws.update_cell(row, col_mappings[2], v)
+                else:
+                    if res != "SKIP":
                         vw = t(res) if "siac_" in str(res) else res
                         tc = col_mappings[0] if i % 2 == 0 else col_mappings[1] if len(col_mappings) > 1 else col_mappings[0]
                         ws.update_cell(row, tc, vw)
-                except: pass
+            except: pass
             pb.progress((i+1)/total)
         await browser.close()
 
-# --- UI ---
+# --- UI LOGIC (FULL BUTTONS RESTORED) ---
 st.title(t("title"))
 st.markdown(t("subtitle"))
 t_siac, t_rnt, t_olx = st.tabs([t("siac_tab"), t("rnal_tab"), t("olx_tab")])
 
 with t_siac:
+    st.subheader(t("siac_sub"))
     st.info(t("dica_siac"))
     if st.button(t("btn_start"), key="run_siac"):
         gc = get_gspread_client()
@@ -357,44 +403,75 @@ with t_siac:
                 for i in range(max(len(f), len(c))):
                     if i < len(f): items.append(f[i]); exists.append(rf[i] if i < len(rf) else "...")
                     if i < len(c): items.append(c[i]); exists.append(rc[i] if i < len(rc) else "...")
-                asyncio.run(process_list_incremental(items, check_siac_on_page, ws, [9, 10], existing_data=exists))
+                asyncio.run(process_list_incremental(items, check_siac_on_page, ws, [9, 10], init_url=SIAC_URL, existing_data=exists))
                 st.success(t("status_done"))
 
 with t_rnt:
+    st.subheader(t("rnal_sub"))
     st.info(t("dica_rnal"))
-    if st.button(t("btn_start"), key="run_rnt"):
-        gc = get_gspread_client()
-        if gc:
-            sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO RNAL")
-            if ws:
-                ads, regs = ws.col_values(1)[1:], ws.col_values(4)[1:]
-                locs_o, locs_r, vals = ws.col_values(3)[1:], ws.col_values(5)[1:], ws.col_values(6)[1:]
-                items, exists = [], []
-                for i in range(len(ads)):
-                    items.append((ads[i], regs[i]))
-                    exists.append((locs_o[i] if i < len(locs_o) else "", locs_r[i] if i < len(locs_r) else "", vals[i] if i < len(vals) else ""))
-                
-                async def al_checker(p, val, log_func):
-                    ad, reg = val
-                    lo = await check_olx_location(p, ad, log_func=log_func)
-                    lr = await check_rnt_rnal_only(p, reg, log_func=log_func)
-                    return lo, lr
-
-                asyncio.run(process_list_incremental(items, al_checker, ws, [3, 5, 6], existing_data=exists))
-                st.success(t("status_done"))
+    col_r1, col_r2 = st.columns(2)
+    with col_r1:
+        if st.button(t("btn_start"), key="run_rnt", use_container_width=True):
+            gc = get_gspread_client()
+            if gc:
+                sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO RNAL")
+                if ws:
+                    ads, regs = ws.col_values(1)[1:], ws.col_values(4)[1:]
+                    lo, lr, v = ws.col_values(3)[1:], ws.col_values(5)[1:], ws.col_values(6)[1:]
+                    items, exists = [], []
+                    for i in range(len(ads)):
+                        items.append((ads[i], regs[i]))
+                        exists.append((lo[i] if i<len(lo) else "", lr[i] if i<len(lr) else "", v[i] if i<len(v) else ""))
+                    
+                    async def al_checker(p, val, log_func):
+                        ad, reg = val
+                        lo = await check_olx_location(p, ad, log_func=log_func)
+                        lr = await check_rnt_rnal_only(p, reg, log_func=log_func)
+                        return lo, lr
+                    asyncio.run(process_list_incremental(items, al_checker, ws, [3, 5, 6], existing_data=exists))
+                    st.success(t("status_done"))
+    with col_r2:
+        if st.button(t("btn_clear_loc"), key="clear_rnt", use_container_width=True):
+            st.info(t("cleaning"))
+            gc = get_gspread_client()
+            if gc:
+                sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO RNAL")
+                if ws:
+                    vals = ws.get_all_values()
+                    count = 0
+                    for i, row in enumerate(vals[1:], 2):
+                        if i <= len(vals) and len(row) >= 6 and row[5] == t("val_correct"):
+                            ws.update_cell(i, 3, ""); ws.update_cell(i, 5, ""); ws.update_cell(i, 6, "")
+                            count += 1
+                    st.success(t("rows_removed", count))
 
 with t_olx:
+    st.subheader(t("olx_sub"))
     st.info(t("dica_olx"))
-    if st.button(t("btn_start"), key="run_olx"):
-        gc = get_gspread_client()
-        if gc:
-            sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "KM CARROS")
-            if ws:
-                ads = ws.col_values(1)[1:]
-                kms, vals = ws.col_values(4)[1:], ws.col_values(5)[1:]
-                items, exists = [], []
-                for i in range(len(ads)):
-                    items.append(ads[i])
-                    exists.append((kms[i] if i < len(kms) else "", "", vals[i] if i < len(vals) else ""))
-                asyncio.run(process_list_incremental(items, check_olx_km, ws, [4, 5], existing_data=exists))
-                st.success(t("status_done"))
+    col_o1, col_o2 = st.columns(2)
+    with col_o1:
+        if st.button(t("btn_start"), key="run_olx", use_container_width=True):
+            gc = get_gspread_client()
+            if gc:
+                sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "KM CARROS")
+                if ws:
+                    ads = ws.col_values(1)[1:]; kms = ws.col_values(4)[1:]; v = ws.col_values(5)[1:]
+                    items, exists = [], []
+                    for i in range(len(ads)):
+                        items.append(ads[i])
+                        exists.append((kms[i] if i<len(kms) else "", "", v[i] if i<len(v) else ""))
+                    asyncio.run(process_list_incremental(items, check_olx_km, ws, [4, 5], existing_data=exists))
+                    st.success(t("status_done"))
+    with col_o2:
+        if st.button(t("btn_clear_mod"), key="clear_olx", use_container_width=True):
+            st.info(t("cleaning"))
+            gc = get_gspread_client()
+            if gc:
+                sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "KM CARROS")
+                if ws:
+                    vals = ws.get_all_values()
+                    count = 0
+                    for i, row in enumerate(vals[1:], 2):
+                        if i <= len(vals) and len(row) >= 5 and (row[4] == t("km_fixed") or row[4] == t("km_moderated") or row[4] == t("km_inactive")):
+                            ws.delete_rows(i); count += 1
+                    st.success(t("rows_removed", count))
