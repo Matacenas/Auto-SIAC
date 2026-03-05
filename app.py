@@ -259,71 +259,67 @@ def batch_clear_rows(ws, rows, condition_func):
 import time
 
 async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
-    """Valida um microchip no SIAC.pt com otimização extrema de memória."""
+    """Valida um microchip no SIAC.pt com alta resiliência e sem bloqueios."""
     chip = str(microchip).strip().split('.')[0].split(',')[0]
     if not chip or len(chip) < 10:
         return "❓ Formato Inválido"
 
-    # Bloquear recursos pesados para economizar RAM e evitar crashes
-    async def block_resources(route):
-        if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
-            await route.abort()
-        else:
-            await route.continue_()
-    
-    try: await page.route("**/*", block_resources)
-    except: pass
-
     for attempt in range(retries + 1):
         try:
+            # Garante que estamos na página principal
             if SIAC_URL not in page.url:
-                await page.goto(SIAC_URL, timeout=60000, wait_until="domcontentloaded")
+                await page.goto(SIAC_URL, timeout=90000, wait_until="domcontentloaded")
 
-            # Aguarda o splash/loading inicial
-            await asyncio.sleep(5)
+            # Aguarda o splash screen dinamicamente
+            await asyncio.sleep(6)
 
-            # Tenta encontrar o campo em TODOS os frames (caso tenha voltado para iframe)
+            # Procura o campo em todos os frames sem filtros restritivos
             target_frame = page
-            # Verifica se existe algum iframe de pesquisa
-            for frame in page.frames:
-                if "siac" in frame.url.lower():
-                    target_frame = frame
-                    break
-
-            focused = await target_frame.evaluate("""
-                () => {
-                    const inputs = Array.from(document.querySelectorAll('input'));
-                    const target = inputs.find(i => i.placeholder && (i.placeholder.includes('transponder') || i.placeholder.includes('0 |')))
-                                || inputs.find(i => i.type === 'text')
-                                || inputs[0];
-                    if (target) {
-                        target.value = '';
-                        target.focus();
-                        target.click();
-                        return true;
-                    }
-                    return false;
-                }
-            """)
-
-            if not focused:
-                # Fallback: tenta preencher pelo seletor genérico mais comum
-                try:
-                    await target_frame.fill("input[placeholder*='0 |']", chip, timeout=5000)
-                    focused = True
-                except: pass
-
-            if not focused:
-                raise Exception("Campo não localizado")
-
-            await page.keyboard.type(chip, delay=50)
+            input_selector = "input[placeholder*='0 |'], input[placeholder*='transponder'], input[type='text']"
             
+            for frame in page.frames:
+                try:
+                    exists = await frame.query_selector(input_selector)
+                    if exists:
+                        target_frame = frame
+                        break
+                except: continue
+
+            # Interação via evaluate para garantir foco e limpeza
+            focused = await target_frame.evaluate(f"""
+                (sel, val) => {{
+                    const el = document.querySelector(sel);
+                    if (el) {{
+                        el.value = '';
+                        el.focus();
+                        el.click();
+                        return true;
+                    }}
+                    return false;
+                }}
+            """, input_selector, chip)
+
+            if not focused:
+                raise Exception("Campo de pesquisa não localizado")
+
+            # Digitação simulada
+            await page.keyboard.type(chip, delay=60)
+            await asyncio.sleep(2) # Tempo para o site reagir à digitação
+            
+            # Polling ultra-preciso via JS Evaluate (Mais rápido e fiável)
             start_poll = time.time()
-            while time.time() - start_poll < 12:
-                content = await target_frame.content()
-                if SIAC_TEXT_MISSING in content:        return "siac_missing"
-                if SIAC_TEXT_REGISTERED in content:     return "siac_registered"
-                if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
+            res_val = "siac_unknown"
+            while time.time() - start_poll < 15:
+                res_val = await target_frame.evaluate(f"""
+                    () => {{
+                        const txt = document.body.innerText;
+                        if (txt.includes("{SIAC_TEXT_MISSING}")) return "siac_missing";
+                        if (txt.includes("{SIAC_TEXT_REGISTERED}") || txt.includes("com registo no SIAC")) return "siac_registered";
+                        if (txt.includes("{SIAC_TEXT_NOT_REGISTERED}") || txt.includes("sem registo")) return "siac_not_registered";
+                        return "polling";
+                    }}
+                """)
+                if res_val != "polling": return res_val
                 await asyncio.sleep(1)
 
             if attempt < retries:
@@ -333,11 +329,11 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
                 
             return "siac_unknown"
             
-        except Exception:
+        except Exception as e:
             if attempt < retries:
                 await asyncio.sleep(3)
                 continue
-            return "⚠️ Erro SIAC"
+            return f"⚠️ Erro SIAC"
     return "⚠️ Erro SIAC"
 
 async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
@@ -482,88 +478,63 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
     return "⚠️ Erro OLX"
 
 async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
-    """Valida um Alojamento Local no RNAL com busca em multi-frames e seletores RNT."""
+    """Valida um Alojamento Local no RNAL com seletores OutSystems de precisão."""
     res = "❓ Sem Dados"
     clean_id = str(reg_id).strip().split('.')[0]
     rnal_url = f"{RNT_AL_DIRECT_URL}{clean_id}"
     
-    # Bloqueio de recursos para RNAL também (economiza RAM)
-    try:
-        await page.route("**/*", lambda route: route.abort() if route.request.resource_type in ["image", "media", "font"] else route.continue_())
-    except: pass
-
     for attempt in range(retries + 1):
         try:
-            await page.goto(rnal_url, timeout=60000, wait_until="networkidle")
+            # Sem bloqueio de recursos para garantir que os scripts OutSystems correm
+            await page.goto(rnal_url, timeout=90000, wait_until="networkidle")
             await asyncio.sleep(6) 
             
-            # Procura o conteúdo em todos os frames (importante para sites RNT/ASPX)
-            target_data = None
-            for frame in page.frames:
-                try:
-                    target_data = await frame.evaluate("""
-                        () => {
-                            const findValue = (label) => {
-                                const all = Array.from(document.querySelectorAll('span, td, div, b, label, th, input'));
-                                const target = all.find(el => {
-                                    const t = el.innerText || el.value || "";
-                                    const trimT = t.trim().toUpperCase();
-                                    return trimT === label.toUpperCase() || trimT === label.toUpperCase() + ":";
-                                });
-                                
-                                if (target) {
-                                    let next = target.nextElementSibling;
-                                    if (next && next.innerText && next.innerText.trim().length > 2) return next.innerText.trim();
-                                    
-                                    if (target.tagName === 'TD' || target.tagName === 'TH') {
-                                        let row = target.closest('tr');
-                                        if (row && row.cells.length > 1) {
-                                            for(let i=0; i < row.cells.length; i++) {
-                                                if (row.cells[i] === target && i+1 < row.cells.length) {
-                                                    return row.cells[i+1].innerText.trim();
-                                                }
-                                            }
-                                        }
-                                    }
-                                    const parentText = target.parentElement ? target.parentElement.innerText : "";
-                                    const val = parentText.replace(new RegExp(label + ":?", "i"), "").trim();
-                                    if (val.length > 2) return val;
-                                }
-                                return "";
-                            };
+            # Extração focada nas classes específicas do portal
+            captured = await page.evaluate("""
+                () => {
+                    // Tenta o seletor mais específico do portal (TableRecords)
+                    const labelDivs = Array.from(document.querySelectorAll('.TableRecords_Label'));
+                    const moradaDiv = labelDivs.find(d => d.innerText.trim() === 'Morada');
+                    
+                    if (moradaDiv) {
+                        // O texto da morada está no pai (TD), basta remover o texto do label
+                        let fullText = moradaDiv.parentElement.innerText;
+                        return fullText.replace('Morada', '').trim();
+                    }
+                    
+                    // Fallback 1: Busca tabular genérica
+                    const ths = Array.from(document.querySelectorAll('th'));
+                    const moradaTh = ths.find(th => th.innerText.includes('Morada'));
+                    if (moradaTh) {
+                        let idx = Array.from(moradaTh.parentElement.cells).indexOf(moradaTh);
+                        let nextRow = moradaTh.closest('table').querySelector('tbody tr');
+                        if (nextRow && nextRow.cells[idx]) return nextRow.cells[idx].innerText;
+                    }
 
-                            const morada = findValue('Morada') || findValue('Designação da via') || findValue('Localização') || findValue('Endereço');
-                            const concelho = findValue('Concelho');
-                            const freguesia = findValue('Freguesia');
-                            
-                            if (morada || concelho || freguesia) {
-                                let full = morada || "";
-                                if (freguesia && !full.toUpperCase().includes(freguesia.toUpperCase())) full += (full ? " - " : "") + freguesia;
-                                if (concelho && !full.toUpperCase().includes(concelho.toUpperCase())) full += (full ? " (" : "") + concelho + (full.includes("(") ? "" : ")");
-                                return full.trim();
-                            }
-                            return null;
-                        }
-                    """)
-                    if target_data: break
-                except: continue
+                    // Fallback 2: Busca por texto bruto (com exclusão do footer)
+                    const mainContent = document.querySelector('#RichWidgets_wt7_block_wtMainContent') || document.body;
+                    const raw = mainContent.innerText;
+                    const m = raw.match(/Morada[:\\s]+([^\\n]+)/i);
+                    if (m && m[1].length > 10) return m[1].trim();
 
-            if target_data and len(target_data) > 3:
-                return target_data
+                    return null;
+                }
+            """)
+
+            if captured and len(captured) > 5:
+                # Limpeza de ruído (newlines e espaços extras)
+                final = " ".join(captured.split())
+                if final.upper().endswith(" PORTUGAL"): final = final[:-9].strip()
+                return final
 
             if attempt < retries:
                 await page.reload()
                 await asyncio.sleep(3)
                 continue
-            
-            # Log de debug se falhar
-            content = await page.content()
-            with open("rnal_debug_log.txt", "a", encoding="utf-8") as f:
-                f.write(f"\n[{time.ctime()}] ID: {clean_id} - URL: {page.url} - TEXT: {content[:500].replace('\\n', ' ')}")
                 
         except Exception:
             if attempt < retries:
-                await asyncio.sleep(3)
+                await asyncio.sleep(4)
                 continue
             return f"⚠️ Erro RNAL"
             
