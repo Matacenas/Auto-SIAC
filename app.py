@@ -259,64 +259,86 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
     """Validates a microchip on SIAC.pt. Returns a translation key or error string."""
     for attempt in range(retries + 1):
         try:
-            # Phase 1: Navigate if not already on SIAC. Use 'load' with a fallback
-            # so we don't hang on third-party tracking scripts.
+            # Phase 1: Navigate if not already on SIAC.
             if SIAC_URL not in page.url:
                 try:
                     await page.goto(SIAC_URL, timeout=90000, wait_until="load")
                 except Exception:
-                    # If 'load' times out (background scripts), domcontentloaded already fired.
-                    # We just proceed — the form is available even if analytics are still loading.
+                    # 'load' may time out due to background analytics scripts — that's fine.
+                    # domcontentloaded has already fired; the form will be ready.
                     pass
 
-            # Phase 2: Wait for the search input to be ready before ANY interaction.
-            input_selector = 'input[placeholder*="transponder" i], input[placeholder*="chip" i], form input[type="text"]:first-of-type'
+            # Phase 2: Wait for the SIAC splash/loading screen to fully DISAPPEAR.
+            # SIAC.pt shows a ~1s black overlay before the search form becomes interactive.
+            # If we interact before it finishes, the form re-renders and clears our input.
+            splash_selectors = [
+                ".loading", ".loading-overlay", ".preloader", ".splash",
+                "#loading", "#preloader", "#splash",
+                "[class*='loading']", "[class*='preload']", "[class*='spinner']",
+            ]
+            for splash_sel in splash_selectors:
+                try:
+                    await page.wait_for_selector(splash_sel, state="hidden", timeout=6000)
+                    break  # Found and confirmed hidden — that's the splash
+                except Exception:
+                    continue  # Selector not found or already gone — try next
+
+            # Buffer for CSS transitions that may follow the splash disappearing
+            await asyncio.sleep(1.5)
+
+            # Phase 3: Wait for the search input to be stable and interactable.
+            input_selector = 'input[placeholder*="transponder" i], input[placeholder*="chip" i], input[type="text"]'
             try:
                 await page.wait_for_selector(input_selector, timeout=20000, state="visible")
+                await asyncio.sleep(0.5)  # Extra tick to ensure the field is stable
             except Exception:
-                # Fallback: if specific selector fails, wait a moment and try any input
-                await asyncio.sleep(3)
+                await asyncio.sleep(3)  # Last-resort buffer if selector not found
 
-            # Phase 3: Clear the field and type the microchip using fill() — faster and more reliable than keyboard.type()
-            await page.evaluate("""
-                () => {
-                    const inputs = Array.from(document.querySelectorAll('input'));
-                    const target = inputs.find(i => i.placeholder && i.placeholder.toLowerCase().includes('transponder'))
-                                || inputs.find(i => i.placeholder && i.placeholder.toLowerCase().includes('chip'))
-                                || inputs.find(i => i.type === 'text');
-                    if (target) { target.value = ''; target.focus(); }
-                }
-            """)
-
-            # Use fill on a best-effort selector, fallback to evaluate-based clearing + keyboard
+            # Phase 4: Fill the microchip value and VERIFY it stuck before submitting.
+            # The verification is the key guard against the splash re-render issue.
             filled = False
             for sel in [input_selector, 'input[type="text"]', 'input']:
                 try:
-                    await page.fill(sel, str(microchip), timeout=5000)
-                    filled = True
-                    break
+                    await page.fill(sel, "", timeout=4000)               # Clear the field
+                    await page.fill(sel, str(microchip), timeout=4000)   # Type the value
+                    typed_val = await page.input_value(sel)              # Read it back
+                    if str(microchip) in typed_val:
+                        filled = True
+                        break
                 except Exception:
                     continue
 
             if not filled:
-                # Last resort: type via keyboard
-                await page.keyboard.type(str(microchip), delay=50)
+                # Keyboard fallback: focus via JS then type character-by-character
+                await page.evaluate("""
+                    () => {
+                        const inp = document.querySelector('input[type="text"]') || document.querySelector('input');
+                        if (inp) { inp.value = ''; inp.focus(); }
+                    }
+                """)
+                await page.keyboard.type(str(microchip), delay=80)
 
             await page.keyboard.press("Enter")
 
-            # Wait for the result to appear — up to 10 seconds
-            await asyncio.sleep(4.5)
+            # Phase 5: Wait for a known SIAC result string to appear (up to 12s).
+            # This replaces fixed sleeps — we stop waiting the moment a result is ready.
+            result_texts = [SIAC_TEXT_REGISTERED, SIAC_TEXT_NOT_REGISTERED, SIAC_TEXT_MISSING]
+            result_selector = ", ".join(f'*:has-text("{txt}")' for txt in result_texts)
+            try:
+                await page.wait_for_selector(result_selector, timeout=12000, state="attached")
+            except Exception:
+                await asyncio.sleep(5)  # Graceful fallback if selector doesn't match
 
             content = await page.content()
-            if SIAC_TEXT_MISSING in content:      return "siac_missing"
-            if SIAC_TEXT_REGISTERED in content:   return "siac_registered"
+            if SIAC_TEXT_MISSING in content:        return "siac_missing"
+            if SIAC_TEXT_REGISTERED in content:     return "siac_registered"
             if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
 
             if attempt < retries:
                 await asyncio.sleep(2)
                 continue
             return "siac_unknown"
-        except Exception as e:
+        except Exception:
             if attempt < retries:
                 await asyncio.sleep(2)
                 continue
