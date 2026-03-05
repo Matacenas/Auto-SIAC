@@ -307,26 +307,29 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
                         break
                 except: continue
 
-            # Interação via evaluate para garantir foco e limpeza
-            focused = await target_frame.evaluate(f"""
+            # Interação via evaluate para garantir foco e limpeza TOTAL e preenchimento direto
+            # O site SIAC às vezes tem comportamentos estranhos com digitação simulada lenta
+            await target_frame.evaluate(f"""
                 (sel, val) => {{
                     const el = document.querySelector(sel);
                     if (el) {{
-                        el.value = '';
+                        el.value = val;
+                        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
                         el.focus();
-                        el.click();
                         return true;
                     }}
                     return false;
                 }}
             """, input_selector, chip)
 
-            if not focused:
-                raise Exception("Campo de pesquisa não localizado")
+            # Dá um clique para garantir que o evento de "search" dispara se necessário
+            try:
+                await target_frame.click(input_selector)
+                await page.keyboard.press("Enter")
+            except: pass
 
-            # Digitação simulada
-            await page.keyboard.type(chip, delay=60)
-            await asyncio.sleep(2) # Tempo para o site reagir à digitação
+            await asyncio.sleep(3) # Tempo para o site processar
             
             # Polling ultra-preciso via JS Evaluate (Mais rápido e fiável)
             start_poll = time.time()
@@ -363,8 +366,9 @@ async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
     clean_id = normalize_id(ad_id)
     if not clean_id or clean_id == "N/A": return "ERR_ID"
     
-    if clean_id.isdigit(): ad_url = f"{OLX_BASE_URL}d/anuncio/{clean_id}.html"
-    else: ad_url = clean_id if clean_id.startswith('http') else f"{OLX_BASE_URL}d/anuncio/{clean_id}.html"
+    # FORMATO ORIGINAL QUE FUNCIONAVA: OLX_BASE_URL + ID
+    if clean_id.isdigit(): ad_url = f"{OLX_BASE_URL}{clean_id}"
+    else: ad_url = clean_id if clean_id.startswith('http') else f"{OLX_BASE_URL}{clean_id}"
 
     for attempt in range(retries + 1):
         try:
@@ -433,8 +437,9 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
     clean_id = normalize_id(ad_id)
     if not clean_id or clean_id == "N/A": return "N/A"
 
-    if clean_id.isdigit(): ad_url = f"{OLX_BASE_URL}d/anuncio/{clean_id}.html"
-    else: ad_url = clean_id if clean_id.startswith('http') else f"{OLX_BASE_URL}d/anuncio/{clean_id}.html"
+    # FORMATO ORIGINAL QUE FUNCIONAVA: OLX_BASE_URL + ID
+    if clean_id.isdigit(): ad_url = f"{OLX_BASE_URL}{clean_id}"
+    else: ad_url = clean_id if clean_id.startswith('http') else f"{OLX_BASE_URL}{clean_id}"
 
     for attempt in range(retries + 1):
         try:
