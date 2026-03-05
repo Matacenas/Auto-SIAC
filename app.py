@@ -255,12 +255,15 @@ def batch_clear_rows(ws, rows, condition_func):
 
 # --- SCRAPERS ---
 
-async def check_siac_on_page(page, microchip: str, retries: int = 2) -> str:
-    """Validates a microchip on SIAC.pt. Returns a translation key or error string.
+import time
 
-    Uses a hybrid approach (JS Focus + Hardware Keyboard typing) to bypass 
-    Angular's strict state management and invisible pointer-event interceptors 
-    that block normal Playwright locator interactions.
+async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
+    """Validates a microchip on SIAC.pt using the fastest, most direct method.
+    
+    Per user instruction: entering the number automatically triggers validation 
+    without needing to press Enter or click a button. We simply focus the field 
+    via JS, type the number via hardware events (required by Angular), and poll 
+    the DOM for the result text.
     """
     chip = str(microchip).strip()
     for attempt in range(retries + 1):
@@ -268,27 +271,24 @@ async def check_siac_on_page(page, microchip: str, retries: int = 2) -> str:
             # Step 1: Navigate to SIAC if not already there.
             if SIAC_URL not in page.url:
                 try:
-                    await page.goto(SIAC_URL, timeout=90000, wait_until="load")
+                    await page.goto(SIAC_URL, timeout=60000, wait_until="load")
                 except Exception:
-                    pass  # Timeout from background analytics is fine.
+                    pass
 
-            # Step 2: Wait for splash screen and Angular bootstrap.
-            await asyncio.sleep(4)
+            # Step 2: Minimal wait for Angular to bootstrap and the splash to start fading.
+            await asyncio.sleep(2.5)
 
-            # Step 3: Find the iframe containing the form, if any.
+            # Step 3: Find the frame and focus the input directly via JS.
             target_frame = page
             for f in page.frames:
                 try:
-                    inps = await f.evaluate("() => document.querySelectorAll('input').length")
-                    if inps > 0:
+                    if await f.evaluate("() => document.querySelectorAll('input').length") > 0:
                         target_frame = f
                         break
                 except Exception:
                     continue
 
-            # Step 4: Force focus via JS (bypassing Playwright interceptability checks)
-            # Find input by placeholder "0 |" or "transponder" or fallback to first text input
-            focus_script = """
+            focused = await target_frame.evaluate("""
                 () => {
                     const inps = Array.from(document.querySelectorAll('input'));
                     const inp = inps.find(i => i.placeholder && i.placeholder.includes('0 |')) 
@@ -301,51 +301,37 @@ async def check_siac_on_page(page, microchip: str, retries: int = 2) -> str:
                     }
                     return false;
                 }
-            """
-            focused = await target_frame.evaluate(focus_script)
-            
-            if not focused:
-                raise Exception("Input field not found in DOM")
-
-            # Step 5: Hardware Keyboard Typing (Crucial for Angular validation)
-            # Type slowly so Angular's reactive form registers the pristine/dirty state change
-            await page.keyboard.type(chip, delay=80)
-            await asyncio.sleep(1)
-
-            # Step 6: Trigger Search
-            # Try JS direct click first on the correct button, fallback to Enter key
-            await target_frame.evaluate("""
-                () => {
-                    const btn = document.querySelector('button.form-control-button.btn.btn-primary:not(.clear-btn)');
-                    if (btn) btn.click();
-                }
             """)
-            await asyncio.sleep(1)
-            await page.keyboard.press("Enter")
 
-            # Step 7: Wait for SIAC to respond (usually 4-6 seconds)
-            await asyncio.sleep(6)
+            if not focused:
+                raise Exception("No input found")
 
-            content = await target_frame.content()
-            if SIAC_TEXT_MISSING in content:        return "siac_missing"
-            if SIAC_TEXT_REGISTERED in content:     return "siac_registered"
-            if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
+            # Step 4: Type the number quickly but physically.
+            # Angular's auto-search triggers automatically when 15 chars are detected.
+            await page.keyboard.type(chip, delay=30)
 
+            # Step 5: Fast polling loop for the result (max 10 seconds).
+            # This returns instantly the moment the success text appears, making it very fast.
+            start_time = time.time()
+            while time.time() - start_time < 10:
+                content = await target_frame.content()
+                if SIAC_TEXT_MISSING in content:        return "siac_missing"
+                if SIAC_TEXT_REGISTERED in content:     return "siac_registered"
+                if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
+                await asyncio.sleep(0.5)
+
+            # If polling times out, try reloading for the next attempt
             if attempt < retries:
-                # Force reload to clear stale state before retrying
-                try:
-                    await page.goto(SIAC_URL, timeout=60000, wait_until="load")
-                except Exception:
-                    pass
-                await asyncio.sleep(3)
+                try: await page.goto(SIAC_URL, timeout=60000, wait_until="load")
+                except Exception: pass
                 continue
+            
             return "siac_unknown"
+            
         except Exception:
             if attempt < retries:
-                try:
-                    await page.goto(SIAC_URL, timeout=60000, wait_until="load")
-                except Exception:
-                    pass
+                try: await page.goto(SIAC_URL, timeout=60000, wait_until="load")
+                except Exception: pass
                 await asyncio.sleep(2)
                 continue
             return "⚠️ Erro SIAC"
