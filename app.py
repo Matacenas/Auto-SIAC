@@ -256,41 +256,72 @@ def batch_clear_rows(ws, rows, condition_func):
 # --- SCRAPERS ---
 
 async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
-    """Stable validation for SIAC."""
+    """Validates a microchip on SIAC.pt. Returns a translation key or error string."""
     for attempt in range(retries + 1):
         try:
+            # Phase 1: Navigate if not already on SIAC. Use 'load' with a fallback
+            # so we don't hang on third-party tracking scripts.
             if SIAC_URL not in page.url:
-                await page.goto(SIAC_URL, timeout=60000, wait_until="commit")
                 try:
-                    await page.wait_for_selector("input", timeout=15000)
-                except:
+                    await page.goto(SIAC_URL, timeout=90000, wait_until="load")
+                except Exception:
+                    # If 'load' times out (background scripts), domcontentloaded already fired.
+                    # We just proceed — the form is available even if analytics are still loading.
                     pass
 
+            # Phase 2: Wait for the search input to be ready before ANY interaction.
+            input_selector = 'input[placeholder*="transponder" i], input[placeholder*="chip" i], form input[type="text"]:first-of-type'
+            try:
+                await page.wait_for_selector(input_selector, timeout=20000, state="visible")
+            except Exception:
+                # Fallback: if specific selector fails, wait a moment and try any input
+                await asyncio.sleep(3)
+
+            # Phase 3: Clear the field and type the microchip using fill() — faster and more reliable than keyboard.type()
             await page.evaluate("""
                 () => {
                     const inputs = Array.from(document.querySelectorAll('input'));
-                    const target = inputs.find(i => i.placeholder && i.placeholder.toLowerCase().includes('transponder')) || inputs[0];
-                    if (target) {
-                        target.value = '';
-                        target.focus();
-                    }
+                    const target = inputs.find(i => i.placeholder && i.placeholder.toLowerCase().includes('transponder'))
+                                || inputs.find(i => i.placeholder && i.placeholder.toLowerCase().includes('chip'))
+                                || inputs.find(i => i.type === 'text');
+                    if (target) { target.value = ''; target.focus(); }
                 }
             """)
-            await page.keyboard.type(str(microchip), delay=60)
+
+            # Use fill on a best-effort selector, fallback to evaluate-based clearing + keyboard
+            filled = False
+            for sel in [input_selector, 'input[type="text"]', 'input']:
+                try:
+                    await page.fill(sel, str(microchip), timeout=5000)
+                    filled = True
+                    break
+                except Exception:
+                    continue
+
+            if not filled:
+                # Last resort: type via keyboard
+                await page.keyboard.type(str(microchip), delay=50)
+
             await page.keyboard.press("Enter")
-            await asyncio.sleep(4.0)
-                
+
+            # Wait for the result to appear — up to 10 seconds
+            await asyncio.sleep(4.5)
+
             content = await page.content()
-            if SIAC_TEXT_MISSING in content: return "siac_missing"
-            if SIAC_TEXT_REGISTERED in content: return "siac_registered"
+            if SIAC_TEXT_MISSING in content:      return "siac_missing"
+            if SIAC_TEXT_REGISTERED in content:   return "siac_registered"
             if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
-            
-            if attempt < retries: await asyncio.sleep(2); continue
+
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
             return "siac_unknown"
-        except:
-            if attempt < retries: await asyncio.sleep(2); continue
-            return "⚠️ Erro"
-    return "⚠️ Erro"
+        except Exception as e:
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
+            return "⚠️ Erro SIAC"
+    return "⚠️ Erro SIAC"
 
 async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
     """Validates car mileage on OLX with very robust text-based searching."""
@@ -340,29 +371,32 @@ async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
                     return genericMatch ? genericMatch[0].trim() : null;
                 }
             """)
-            if km_val: return km_val
-            
+            if km_val:
+                return km_val
+
             content = (await page.content()).lower()
             if "já não está disponível" in content or "already moderated" in content:
-                # We return a specific code or the translated string directly if we want it in Col D
-                # However, to maintain translation in Col D, we must use the t() function inside the checker
-                # but t() is available in the UI loop. Let's return a unique string that the checker maps.
                 return "ERR_MODERATED"
-            if "ups, algo não está bem" in content or "inactive" in content.lower():
+            if "ups, algo não está bem" in content or "inactive" in content:
                 return "ERR_INACTIVE"
-            if "não se encontra disponível" in content or "anúncio removido" in content or "removed" in content.lower():
+            if "não se encontra disponível" in content or "anúncio removido" in content or "removed" in content:
                 return "ERR_INACTIVE"
-            if attempt < retries: await asyncio.sleep(2); continue
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
             return "ERR_NOT_FOUND"
-        except:
-            if attempt < retries: await asyncio.sleep(2); continue
+        except Exception:
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
             return "⚠️ Erro Conexão"
-    return "⚠️ Erro"
+    return "⚠️ Erro OLX"
 
 async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
-    """Extracts location from OLX ad."""
-    if not ad_id or str(ad_id).lower() == 'nan': return "N/A"
-    
+    """Extracts the city/district location from an OLX ad."""
+    if not ad_id or str(ad_id).lower() == 'nan':
+        return "N/A"
+
     if str(ad_id).isdigit():
         ad_url = f"{OLX_BASE_URL}{ad_id}"
     else:
@@ -372,75 +406,79 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
         try:
             await page.goto(ad_url, timeout=45000, wait_until="domcontentloaded")
             await asyncio.sleep(4)
-            
+
             location = await page.evaluate("""
                 () => {
                     const blacklist = ['LOCALIZAÇÃO', 'MAP DATA', 'CLICK TO TOGGLE', 'METRIC', 'IMPERIAL', 'UNITS', '©', 'LOJA', 'GEOGR'];
-                    
+
                     const isMetadata = (text) => {
                         if (!text) return true;
                         const t = text.trim();
-                        // Reject if contains distance pattern (e.g. "1 km", "500 m")
+                        // Reject distance patterns (e.g. "1 km", "500 m") and blacklisted UI text
                         if (/\\d+.*km/i.test(t) || /\\d+.*m\\s*$/i.test(t)) return true;
-                        // Reject if contains blacklist words
                         const up = t.toUpperCase();
                         return blacklist.some(b => up.includes(b));
                     };
 
                     const surgicalExtract = (container) => {
                         if (!container) return null;
-                        // Find all direct or deep text nodes/spans
                         const elements = Array.from(container.querySelectorAll('span, a, p'))
                             .map(el => el.innerText.trim())
                             .filter(t => t.length > 2 && !isMetadata(t));
-                        
-                        // Deduplicate and join first 2 unique parts
                         const unique = [...new Set(elements)];
-                        if (unique.length > 0) return unique.slice(0, 2).join(' - ');
-                        return null;
+                        return unique.length > 0 ? unique.slice(0, 2).join(' - ') : null;
                     };
 
-                    // Priority 1: Direct location link
+                    // Priority 1: Direct location data-testid link
                     const locLink = document.querySelector('a[data-testid="ad-location-link"]');
                     if (locLink) {
                         const res = surgicalExtract(locLink);
                         if (res) return res;
                     }
 
-                    // Priority 2: Section search (fallback)
+                    // Priority 2: Find the LOCALIZAÇÃO section header and walk up the DOM
                     const all = Array.from(document.querySelectorAll('span, p, a, div, h2, h3'));
                     const header = all.find(el => el.innerText && el.innerText.trim().toUpperCase() === 'LOCALIZAÇÃO');
                     if (header) {
                         let parent = header.parentElement;
-                        // Go up a few levels to find the container
                         for (let i = 0; i < 3 && parent; i++) {
                             const res = surgicalExtract(parent);
                             if (res) return res;
                             parent = parent.parentElement;
                         }
                     }
-                    
+
                     return null;
                 }
             """)
-            if location: return location
-            if attempt < retries: await asyncio.sleep(2); continue
+            if location:
+                return location
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
             return "❓ Localização"
-        except:
-            if attempt < retries: await asyncio.sleep(2); continue
-            return "⚠️ Conexão"
-    return "⚠️ Erro"
+        except Exception:
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
+            return "⚠️ Conexão OLX"
+    return "⚠️ Erro OLX"
 
 async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
-    """Validates registration in RNAL (Direct detail) with grid fallback."""
+    """Validates a Local Accommodation registration on RNAL.
+
+    Uses a two-strategy approach:
+    1. Detail Page: parses address fields (Morada, Concelho, Freguesia) directly.
+    2. Grid Fallback: reads the ASP.NET tabular results if the detail page is unavailable.
+    """
     res = "❓ Sem Dados"
     rnal_url = f"{RNT_AL_DIRECT_URL}{reg_id}"
     for attempt in range(retries + 1):
         try:
             await page.goto(rnal_url, timeout=45000, wait_until="domcontentloaded")
-            await asyncio.sleep(3) # Give it time to load the record
-            
-            # Try Detail Page Strategy first
+            await asyncio.sleep(3)
+
+            # Strategy 1: Detail Page — look for structured address labels
             details = await page.evaluate("""
                 () => {
                     const getText = (label) => {
@@ -460,11 +498,11 @@ async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
                         }
                         return null;
                     };
-                    
+
                     const address = getText('Morada') || getText('Localização');
                     const concelho = getText('Concelho');
                     const freguesia = getText('Freguesia');
-                    
+
                     if (address) {
                         return address + (freguesia ? ' - ' + freguesia : '') + (concelho ? ' (' + concelho + ')' : '');
                     }
@@ -474,19 +512,15 @@ async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
             if details:
                 res = details
                 break
-                
-            # Fallback: Grid Strategy (if it lands on search results)
+
+            # Strategy 2: Grid Fallback — ASP.NET tabular search results
             grid_res = await page.evaluate("""
                 () => {
                     const row = document.querySelector('tr.GridRow, tr.GridAlternatingRow, .GridView tr:nth-child(2), table tr:nth-child(2)');
                     if (row) {
                         const cells = Array.from(row.querySelectorAll('td'));
                         if (cells.length > 2) {
-                            // Usually the location is the second to last column or specific column
-                            // We can try to guess or just join relevant info
-                            const text = cells.map(c => c.innerText.trim()).filter(t => t.length > 2).join(' | ');
-                            // Return the last relevant cell if it's long enough
-                            return cells[cells.length - 2].innerText.trim() + " (" + cells[cells.length-3].innerText.trim() + ")";
+                            return cells[cells.length - 2].innerText.trim() + " (" + cells[cells.length - 3].innerText.trim() + ")";
                         }
                     }
                     return null;
@@ -499,10 +533,13 @@ async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
             if "não foram encontrados" in (await page.content()).lower():
                 res = "❌ Não Encontrado"
                 break
-            if attempt < retries: await asyncio.sleep(2)
-        except: 
-            if attempt < retries: await asyncio.sleep(2)
-            else: res = "⚠️ Erro RNAL"
+            if attempt < retries:
+                await asyncio.sleep(2)
+        except Exception:
+            if attempt < retries:
+                await asyncio.sleep(2)
+            else:
+                res = "⚠️ Erro RNAL"
     return res
 
 # --- CORE ENGINE ---
@@ -525,17 +562,33 @@ async def process_list_incremental(
         browser, context, page = None, None, None
         async def init_browser():
             nonlocal browser, context, page
-            if browser: await browser.close()
-            launch_args = ["--disable-dev-shm-usage", "--disable-gpu", "--no-sandbox", "--disable-extensions"]
-            try: browser = await p.chromium.launch(headless=True, args=launch_args)
-            except:
+            if browser:
+                try: await browser.close()
+                except Exception: pass
+            launch_args = [
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--no-sandbox",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-renderer-backgrounding",
+            ]
+            try:
+                browser = await p.chromium.launch(headless=True, args=launch_args)
+            except Exception:
                 os.system("playwright install chromium")
                 browser = await p.chromium.launch(headless=True, args=launch_args)
-            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 800},
+            )
+            context.set_default_timeout(60000)
             page = await context.new_page()
-            if init_url: 
-                try: await page.goto(init_url, timeout=60000, wait_until="commit")
-                except: pass
+            if init_url:
+                try:
+                    await page.goto(init_url, timeout=90000, wait_until="load")
+                except Exception:
+                    pass  # Proceed even if load times out (background scripts)
 
         await init_browser()
         total = len(items)
