@@ -62,7 +62,7 @@ TRANSLATIONS = {
         "err_no_url": "Insira o URL.",
         "err_no_sheet": "ERRO: Aba '{}' não encontrada no ficheiro!",
         "dica_siac": "💡 **Processo de Validação:**\n\n1. Lê os dados das Colunas G e H.\n2. Realiza a validação automática do microchip no site do SIAC.pt.\n3. Regista o resultado da validação nas Colunas I e J.",
-        "dica_rnal": "💡 **Processo de Validação:**\n\n1. Lê o ID do anúncio na Coluna A.\n2. Faz scraping da localização do anúncio em olx.pt e regista o resultado na Coluna C.\n3. Lê o Número de Alojamento Local da Coluna D e valida no site do RNAL:\n   https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr=AdID\n4. Faz scraping do resultado da validação e regista a informação na Coluna E.\n5. Compara a localização do OLX com a do RNAL e regista a sugestão na Coluna F.",
+        "dica_rnal": "💡 **Processo de Validação:**\n\n1. Lê o ID do anúncio na Coluna A.\n2. Faz scraping da localização do anúncio em olx.pt e regista o resultado na Coluna C.\n3. Lê o Número de Alojamento Local da Coluna D e valida no site do RNAL.\n4. Faz scraping do resultado da validação e regista a informação na Coluna E.\n5. Compara a localização do OLX com a do RNAL e regista a sugestão na Coluna F.",
         "dica_olx": "💡 **Processo de Validação:**\n\n1. Lê o ID do anúncio na Coluna A.\n2. Acede a olx.pt e faz scraping dos quilómetros apresentados no anúncio (LIVE).\n3. Regista os quilómetros obtidos na Coluna D.\n4. Compara os valores da Coluna C com os da Coluna D.\n5. Regista o resultado da validação na Coluna E.",
         "restarting_browser": "♻️ Reiniciando navegador...",
         "val_waiting": "⚠️ Sem resultado - Confirmar no RNET ⚠️",
@@ -214,11 +214,17 @@ async def check_siac_on_page(page, microchip: str, log_func: Callable = None) ->
                 await asyncio.sleep(4)
             
             sel = "input[name='searchGtWro'], input[placeholder*='transponder']"
-            await page.evaluate(f"""(s, v) => {{
+            await page.evaluate("""([s, v]) => {
                 const el = document.querySelector(s);
-                if (el) {{ el.value = v; el.dispatchEvent(new Event('input', {{bubbles:true}})); el.focus(); return true; }}
+                if (el) { 
+                    el.value = v; 
+                    el.dispatchEvent(new Event('input', {bubbles:true})); 
+                    el.dispatchEvent(new Event('change', {bubbles:true})); 
+                    el.focus(); 
+                    return true; 
+                }
                 return false;
-            }}""", sel, chip)
+            }""", [sel, chip])
             await page.keyboard.press("Enter")
             log(f"Consultando chip {chip}...")
             
@@ -301,18 +307,34 @@ async def check_rnt_rnal_only(page, reg_id: str, log_func: Callable = None) -> s
         for target in elements:
             try:
                 morada = await target.evaluate("""() => {
-                    const labels = Array.from(document.querySelectorAll('.TableRecords_Label, td, span'));
-                    const l = labels.find(el => {
-                        const t = el.innerText.trim();
-                        return t === 'Morada' || t === 'Morada:';
-                    });
-                    if (l) {
-                        if (l.classList.contains('TableRecords_Label')) return l.parentElement.innerText.replace(/Morada:?/i, '').trim();
-                        if (l.tagName === 'TD' && l.nextElementSibling) return l.nextElementSibling.innerText.trim();
+                    const findValue = (label) => {
+                        const all = Array.from(document.querySelectorAll('.TableRecords_Label, td, span, div'));
+                        const l = all.find(el => el.innerText.trim() === label || el.innerText.trim() === label + ':');
+                        if (!l) return null;
+                        
+                        // Check next sibling (Table format)
+                        if (l.nextElementSibling && l.tagName === 'TD') return l.nextElementSibling.innerText.trim();
+                        
+                        // Check parent's innerText (Label + Value format)
+                        const pText = l.parentElement.innerText;
+                        const match = pText.match(new RegExp(label + ":?\\\\s*(.*)", "i"));
+                        return match ? match[1].trim() : null;
+                    };
+                    
+                    const m = findValue('Morada');
+                    // Prevent catching email by checking if it contains '@' and no spaces (heuristic)
+                    if (m && m.length > 5) {
+                        if (m.includes('@') && !m.includes(' ')) return "REJECTED_EMAIL";
+                        return m;
                     }
                     return null;
                 }""")
-                if morada and len(morada) > 5: return morada.strip()
+                if morada == "REJECTED_EMAIL":
+                    log("Aviso: Detectado email no campo Morada, ignorando...")
+                    continue
+                if morada: 
+                    log(f"Morada detectada: {morada[:30]}...")
+                    return morada.strip()
             except: continue
         return "❓ Sem Dados"
     except: return "⚠️ Erro RNT"
