@@ -280,25 +280,24 @@ def normalize_id(val: Any) -> str:
         
     return s
 
-async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
+async def check_siac_on_page(page, microchip: str, log_func: Callable = None) -> str:
     """Valida um microchip no SIAC.pt com alta resiliência."""
+    def log(m):
+        if log_func: log_func(f"[SIAC] {m}")
+    
     chip = normalize_id(microchip)
     if not chip or len(chip) < 10:
         return "❓ Formato Inválido"
 
-    for attempt in range(retries + 1):
+    for attempt in range(2):
         try:
-            # Garante que estamos na página principal
             if SIAC_URL not in page.url:
-                # Usa domcontentloaded + sleep manual para evitar timeouts de trackers (networkidle)
                 await page.goto(SIAC_URL, timeout=60000, wait_until="domcontentloaded")
                 await asyncio.sleep(4)
             
-            # Seletor por NAME é mais estável baseado no diagnóstico profundo
             input_selector = "input[name='searchGtWro'], input[placeholder*='transponder']"
-            target_frame = page # Inicia com a página principal
+            target_frame = page 
             
-            # Tenta encontrar o input na página ou em frames
             input_el = await page.query_selector(input_selector)
             if not input_el:
                 for frame in page.frames:
@@ -309,7 +308,7 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
                             break
                     except: continue
 
-            # Interação via evaluate para garantir foco e limpeza TOTAL e preenchimento direto
+            log(f"Introduzindo transponder...")
             await target_frame.evaluate(f"""
                 (sel, val) => {{
                     const el = document.querySelector(sel);
@@ -324,44 +323,36 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
                 }}
             """, input_selector, chip)
 
-            # Clique no campo e Enter para garantir o trigger de pesquisa do SIAC
             try:
                 await target_frame.click(input_selector)
                 await page.keyboard.press("Enter")
+                log("Pesquisa submetida.")
             except: pass
 
-            await asyncio.sleep(4) # Tempo para o site processar
+            await asyncio.sleep(4) 
             
-            # Polling ultra-preciso via JS Evaluate (Mais rápido e fiável)
             start_poll = time.time()
-            res_val = "siac_unknown"
             while time.time() - start_poll < 15:
                 res_val = await target_frame.evaluate(f"""
                     () => {{
                         const txt = document.body.innerText;
-                        // Match exato e sub-strings para labels de sucesso/falha
                         if (txt.includes("{SIAC_TEXT_MISSING}")) return "siac_missing";
                         if (txt.includes("{SIAC_TEXT_REGISTERED}") || txt.includes("com registo no SIAC") || txt.includes("registered")) return "siac_registered";
                         if (txt.includes("{SIAC_TEXT_NOT_REGISTERED}") || txt.includes("sem registo") || txt.includes("unregistered")) return "siac_not_registered";
                         return "polling";
                     }}
                 """)
-                if res_val != "polling": return res_val
+                if res_val != "polling":
+                    log(f"Status detetado: {res_val}")
+                    return res_val
                 await asyncio.sleep(1)
-
-            if attempt < retries:
-                await page.reload()
-                await asyncio.sleep(3)
-                continue
-                
-            return "siac_unknown"
             
+            log("Timeout no portal SIAC.")
+            return "siac_error"
         except Exception as e:
-            if attempt < retries:
-                await asyncio.sleep(3)
-                continue
-            return f"⚠️ Erro SIAC"
-    return "⚠️ Erro SIAC"
+            log(f"Erro: {str(e)[:50]}")
+            if attempt == 0: await page.reload()
+    return "siac_error"
 
 async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
     """Extrai os KM de um anúncio OLX."""
@@ -505,69 +496,64 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
             return "⚠️ Conexão OLX"
     return "⚠️ Erro OLX"
 
-async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
+async def check_rnt_rnal_only(page, reg_id: str, log_func: Callable = None, retries: int = 1) -> str:
     """Valida um Alojamento Local no RNAL com extração cirúrgica."""
-    res = "❓ Sem Dados"
+    def log(m):
+        if log_func: log_func(f"[RNT] {m}")
+        
     clean_id = normalize_id(reg_id)
     rnal_url = f"{RNT_AL_DIRECT_URL}{clean_id}"
+    log(f"Iniciando scraping RNT para ID: {clean_id}")
     
     for attempt in range(retries + 1):
         try:
-            # Sincroniza com a estratégia do OLX (domcontentloaded + sleep)
             await page.goto(rnal_url, timeout=60000, wait_until="domcontentloaded")
-            await asyncio.sleep(8) # Tempo crítico para OutSystems carregar tabelas
+            await asyncio.sleep(8) 
             
-            # Extração Total: Tenta página principal e depois frames
             elements_to_try = [page] + page.frames
+            log(f"Página RNT carregada. Analisando {len(elements_to_try)} frames...")
             
             for target in elements_to_try:
                 try:
                     captured = await target.evaluate("""
                         () => {
-                            // Estratégia de Elite: Procura o label e extrai o valor do TD irmão ou do pai
                             const allElements = Array.from(document.querySelectorAll('.TableRecords_Label, td, span, div'));
-                            const moradaLabel = allElements.find(el => el.innerText.trim() === 'Morada' || el.innerText.trim() === 'Morada:');
+                            const moradaLabel = allElements.find(el => {
+                                const t = el.innerText.trim();
+                                return t === 'Morada' || t === 'Morada:';
+                            });
                             
                             if (moradaLabel) {
-                                // Se for TableRecords_Label, o texto está no pai TD (removendo a palavra Morada)
                                 if (moradaLabel.classList.contains('TableRecords_Label')) {
                                     return moradaLabel.parentElement.innerText.replace(/Morada:?/i, '').trim();
                                 }
-                                // Se for um TD, o valor pode estar no próximo TD
                                 if (moradaLabel.tagName === 'TD' && moradaLabel.nextElementSibling) {
                                     return moradaLabel.nextElementSibling.innerText.trim();
                                 }
                             }
-
-                            // Fallback Pro: Regex em todo o corpo (excluindo cabeçalho/rodape se possível)
-                            const bodyText = document.body.innerText;
-                            const regex = /Morada[:\\s\\t]+([^\\n\\r]+)/i;
-                            const match = bodyText.match(regex);
-                            if (match && match[1].length > 10) return match[1].trim();
-                            
                             return null;
                         }
                     """)
                     if captured and len(captured) > 5:
-                        final = " ".join(captured.split())
-                        if final.upper().endswith(" PORTUGAL"): final = final[:-9].strip()
+                        final = " ".join(captured.split()).strip()
+                        log(f"Morada encontrada: {final[:40]}...")
                         return final
                 except: continue
 
+            log("Aviso: Morada não encontrada na estrutura da página.")
             if attempt < retries:
                 await page.reload()
                 await asyncio.sleep(4)
                 continue
                 
-        except Exception:
+        except Exception as e:
+            log(f"Erro RNT: {str(e)[:50]}")
             if attempt < retries:
                 await asyncio.sleep(4)
                 continue
-            return f"⚠️ Erro RNAL"
+            return f"⚠️ Erro RNT"
             
-    return res
-
-# --- CORE ENGINE ---
+    return "❓ Sem Dados"
 
 async def process_list_incremental(
     items: List[Any], 
@@ -576,17 +562,27 @@ async def process_list_incremental(
     col_mappings: List[int], # List of columns to update
     init_url: Optional[str] = None,
     refresh_every: int = 50,
+    existing_data: Optional[List[Any]] = None, # Data to check for SKIPPING
     **extra_params
 ) -> List[Any]:
     total = len(items)
     progress_bar = st.progress(0)
     status_text = st.empty()
+    st.subheader("🖥️ Console Debug LIVE")
+    debug_console = st.code("Aguardando início...", language="text")
+    
+    logs = []
+    def log(msg):
+        logs.append(f"> {msg}")
+        debug_console.code("\n".join(logs[-12:])) # Mostra os últimos 12 logs
+    
     results = ["..."] * total
     
     async with async_playwright() as p:
         browser, context, page = None, None, None
         async def init_browser():
             nonlocal browser, context, page
+            log(f"Iniciando browser...")
             if browser:
                 try: await browser.close()
                 except: pass
@@ -600,48 +596,73 @@ async def process_list_incremental(
             context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", viewport={"width": 1280, "height": 800})
             page = await context.new_page()
             if init_url:
-                try: await page.goto(init_url, timeout=60000, wait_until="domcontentloaded")
-                except: pass
+                try: 
+                    await page.goto(init_url, timeout=60000, wait_until="domcontentloaded")
+                    log(f"Página base carregada: {init_url}")
+                except Exception as e: 
+                    log(f"Aviso ao carregar {init_url}: {str(e)[:50]}")
 
         await init_browser()
         
         for i, val in enumerate(items):
+            # NOVO: Skip Logic Profissional
+            should_skip = False
+            if existing_data and i < len(existing_data):
+                raw_existing = existing_data[i]
+                if isinstance(raw_existing, (list, tuple)):
+                    if len(raw_existing) > 2 and raw_existing[2] in [t("val_correct"), t("val_wrong")]:
+                        should_skip = True
+                elif raw_existing and raw_existing not in ["...", "N/A", ""]:
+                    should_skip = True
+            
+            if should_skip:
+                log(f"Linha {i+2}: Já processada. A saltar para poupar tempo.")
+                results[i] = "SKIP"
+                progress_bar.progress((i + 1) / total)
+                continue
+
             if i > 0 and i % refresh_every == 0:
+                log("Refresh periódico do browser...")
                 await init_browser()
 
             cleaned = normalize_id(val[0] if isinstance(val, (tuple, list)) else val)
             if not cleaned or cleaned.lower() == "nan":
                 res = "N/A"
+                log(f"ID inválido na linha {i+2}")
             else:
                 status_text.text(t("status_working", cleaned))
+                log(f"Lendo ID: {cleaned}...")
                 if page.is_closed(): await init_browser()
-                res = await checker_func(page, cleaned if not isinstance(val, (tuple, list)) else val, **extra_params)
+                try:
+                    res = await checker_func(page, cleaned if not isinstance(val, (tuple, list)) else val, log_func=log, **extra_params)
+                    log(f"OK -> {res if not isinstance(res, (tuple, list)) else 'Sucesso'}")
+                except Exception as e:
+                    log(f"ERRO NO SCRAPING: {str(e)[:100]}")
+                    res = "siac_error" if col_mappings == [9, 10] else ("Erro", "Erro")
             
             results[i] = res
             
-            # ATUALIZAÇÃO DIRETA NA FOLHA (Robustez Máxima)
-            try:
-                # SIAC Interleaved Logic: i=0,2,4... -> Col 9 | i=1,3,5... -> Col 10
-                # row_idx calculation: (0//2)+2=2, (1//2)+2=2, (2//2)+2=3... Correct.
-                row_idx = (i // 2 if col_mappings == [9, 10] else i) + 2
-                
-                if isinstance(res, (tuple, list)): 
-                    ws.update_cell(row_idx, col_mappings[0], res[0])
-                    if len(res) > 1 and len(col_mappings) > 1:
-                        ws.update_cell(row_idx, col_mappings[1], res[1])
-                    
-                    # RNAL Specific: 3rd column is auto-validation
-                    if col_mappings == [3, 5, 6]:
-                        olx_l, rnt_l = str(res[0]).lower(), str(res[1]).lower()
-                        if "sem dados" in rnt_l or not rnt_l or rnt_l == "n/a": v = t("val_waiting")
-                        elif olx_l != "n/a" and any(word in rnt_l for word in olx_l.split() if len(word) > 3): v = t("val_correct")
-                        else: v = t("val_wrong")
-                        ws.update_cell(row_idx, col_mappings[2], v)
-                else: 
-                    val_to_write = t(res) if "siac_" in str(res) else res
-                    target_col = col_mappings[0] if i % 2 == 0 else col_mappings[1] if len(col_mappings) > 1 else col_mappings[0]
-                    ws.update_cell(row_idx, target_col, val_to_write)
-            except: pass 
+            # ATUALIZAÇÃO DIRETA NA FOLHA
+            if res != "SKIP":
+                try:
+                    row_idx = (i // 2 if col_mappings == [9, 10] else i) + 2
+                    if isinstance(res, (tuple, list)): 
+                        ws.update_cell(row_idx, col_mappings[0], res[0])
+                        if len(res) > 1 and len(col_mappings) > 1:
+                            ws.update_cell(row_idx, col_mappings[1], res[1])
+                        
+                        if col_mappings == [3, 5, 6]: # RNAL Specific
+                            olx_l, rnt_l = str(res[0]).lower(), str(res[1]).lower()
+                            if "sem dados" in rnt_l or not rnt_l or rnt_l == "n/a" or rnt_l == "erro": v = t("val_waiting")
+                            elif olx_l != "n/a" and any(word in rnt_l for word in olx_l.split() if len(word) > 3): v = t("val_correct")
+                            else: v = t("val_wrong")
+                            ws.update_cell(row_idx, col_mappings[2], v)
+                    else: 
+                        val_to_write = t(res) if "siac_" in str(res) else res
+                        target_col = col_mappings[0] if i % 2 == 0 else col_mappings[1] if len(col_mappings) > 1 else col_mappings[0]
+                        ws.update_cell(row_idx, target_col, val_to_write)
+                except Exception as e: 
+                    log(f"Erro ao gravar Sheets: {str(e)[:50]}")
             
             progress_bar.progress((i + 1) / total)
             
@@ -690,11 +711,14 @@ with tab_siac:
                             existing_results.append(res_crias[i] if i < len(res_crias) else "...")
                     
                     with st.spinner(""):
-                        # O processo SIAC requer mapeamento especial para I (9) e J (10) dependendo se é femea ou cria
-                        # Como interleaved mistura ambos, precisamos de uma lógica linear simples dentro do loop
-                        # Mas para simplificar AGORA e garantir que os dados caem, vamos processar linearmente.
-                        # Na verdade, a melhor forma é passar a worksheet e deixar o motor gravar.
-                        asyncio.run(process_list_incremental(interleaved, check_siac_on_page, ws=ws, col_mappings=[9, 10], init_url=SIAC_URL))
+                        asyncio.run(process_list_incremental(
+                            interleaved, 
+                            check_siac_on_page, 
+                            ws=ws, 
+                            col_mappings=[9, 10], 
+                            init_url=SIAC_URL,
+                            existing_data=existing_results
+                        ))
                     st.success(t("status_done"))
                 except Exception as e: st.error(f"Erro: {e}")
 
@@ -758,15 +782,21 @@ with tab_rnt:
                         # We use existing_val for skipping.
                         combined_existing.append([existing_olx_loc[i], existing_rnal_data[i], existing_val[i]])
                     
-                    async def al_checker(page, ids_tuple):
+                    async def al_checker(page, ids_tuple, log_func=None):
                         o_id, r_id = ids_tuple
-                        olx_loc = await check_olx_location(page, normalize_id(o_id))
-                        rnt_data = await check_rnt_rnal_only(page, normalize_id(r_id))
+                        olx_loc = await check_olx_location(page, normalize_id(o_id), log_func=log_func)
+                        rnt_data = await check_rnt_rnal_only(page, normalize_id(r_id), log_func=log_func)
                         return (olx_loc, rnt_data)
 
                     with st.spinner(""):
                         combined_ids = list(zip(olx_ids, rnal_ids))
-                        asyncio.run(process_list_incremental(combined_ids, al_checker, ws=ws, col_mappings=[3, 5, 6]))
+                        asyncio.run(process_list_incremental(
+                            combined_ids, 
+                            al_checker, 
+                            ws=ws, 
+                            col_mappings=[3, 5, 6],
+                            existing_data=combined_existing
+                        ))
                     st.success(t("status_done"))
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
@@ -817,22 +847,17 @@ with tab_olx:
                     ids += [""] * (max_len - len(ids))
                     system_km += [""] * (max_len - len(system_km))
                     
-                    async def cars_checker(page, id_val_tuple):
+                    async def cars_checker(page, id_val_tuple, log_func=None):
                         ad_id, sys_km_raw = id_val_tuple
-                        # Get found KM from OLX
-                        found_km_str = await check_olx_km(page, ad_id)
+                        found_km_str = await check_olx_km(page, ad_id, log_func=log_func)
                         
-                        # Compare with sys_km_raw
                         sys_km = str(sys_km_raw).replace(' ', '').replace('.', '').replace(',', '').strip()
                         found_km_clean = found_km_str.replace('km', '').replace(' ', '').replace('.', '').replace(',', '').strip().lower()
                         
                         validation = "..."
-                        if sys_km:
-                            sys_km_clean = "".join(filter(str.isdigit, str(sys_km)))
-                        else:
-                            sys_km_clean = ""
+                        if sys_km: sys_km_clean = "".join(filter(str.isdigit, str(sys_km)))
+                        else: sys_km_clean = ""
 
-                        # Map internal codes to translated strings
                         if found_km_str == "ERR_MODERATED":
                             found_km_str = t("km_moderated")
                             validation = found_km_str
@@ -843,30 +868,34 @@ with tab_olx:
                             found_km_str = "❓ Km não encontrado"
                             validation = t("km_missing_param")
                         
-                        if validation == "...": # If not already set by error codes
+                        if validation == "...": 
                             if found_km_str != "...":
                                 found_km_clean = "".join(filter(str.isdigit, found_km_str))
-                                
                                 if found_km_clean:
-                                    if len(found_km_clean) >= 6:
-                                        # 6+ digits is the professional/corrected format (e.g., 143.940)
-                                        validation = t("km_fixed")
-                                    elif len(found_km_clean) < 5:
-                                        # Less than 5 is definitely wrong/incomplete
-                                        validation = t("km_wrong")
+                                    if len(found_km_clean) >= 6: validation = t("km_fixed")
+                                    elif len(found_km_clean) < 5: validation = t("km_wrong")
                                     else:
-                                        # 5 digits case: check if it matches the sheet prefix
-                                        if sys_km_clean and sys_km_clean in found_km_clean:
-                                            validation = t("km_wrong") # Matches prefix but still in the "old/wrong" format
-                                        else:
-                                            validation = t("km_fixed")
+                                        if sys_km_clean and sys_km_clean in found_km_clean: validation = t("km_wrong")
+                                        else: validation = t("km_fixed")
                         
                         return (found_km_str, validation)
 
                     with st.spinner(""):
-                        # Pass zipped list to show Ad ID in status
                         combined = list(zip(ids, system_km))
-                        asyncio.run(process_list_incremental(combined, cars_checker, ws=ws, col_mappings=[4, 5]))
+                        # Load existing results for SKIP logic
+                        combined_existing = []
+                        for i in range(len(ids)):
+                            # Check column E (Validation)
+                            v = existing_val[i] if i < len(existing_val) else ""
+                            combined_existing.append(v)
+
+                        asyncio.run(process_list_incremental(
+                            combined, 
+                            cars_checker, 
+                            ws=ws, 
+                            col_mappings=[4, 5],
+                            existing_data=combined_existing
+                        ))
                     st.success(t("status_done"))
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
