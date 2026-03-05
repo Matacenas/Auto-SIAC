@@ -219,7 +219,6 @@ async def check_siac_on_page(page, microchip: str, log_func: Callable = None) ->
                 await asyncio.sleep(4)
             
             sel = "input[name='searchGtWro'], input[placeholder*='transponder']"
-            submit_btn = "button[type='submit'], .btn-primary, .submit"
             await page.evaluate("""([s, v]) => {
                 const el = document.querySelector(s);
                 if (el) { 
@@ -232,51 +231,25 @@ async def check_siac_on_page(page, microchip: str, log_func: Callable = None) ->
             }""", [sel, chip])
             
             log(f"Consultando chip {chip}...")
-            # Tentativa de clique real no botão
-            try: await page.click(submit_btn, timeout=5000)
-            except: await page.keyboard.press("Enter")
+            # Click real no botão de pesquisa (Lupa/Submit)
+            await page.click("button[type='submit'], .btn-primary, .fa-search", timeout=5000)
             
-            # Polling for result (Resilient & Sequential)
+            # Polling (Simplificado)
             start = time.time()
-            tried_click = False
-            while time.time() - start < 50:
-                res_data = await page.evaluate(f"""() => {{
-                    const text = document.body.innerText;
-                    const clean = (s) => s.normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
-                    const tc = clean(text);
-                    
-                    if (!tc.includes("{chip[:10]}")) return {{ res: "polling", snippet: text.substring(0, 30) }};
-                    
-                    if (tc.includes("não foram encontrados resultados") || tc.includes("nao existe nenhum animal") || tc.includes("sem registo")) 
-                        return {{ res: "siac_not_registered" }};
-                    if (tc.includes("encontra desaparecido") || tc.includes("animal desaparecido")) 
-                        return {{ res: "siac_missing" }};
-                    if (tc.includes("com registo") || tc.includes("registado no siac")) 
-                        return {{ res: "siac_registered" }};
-                    
-                    return {{ res: "polling", snippet: text.substring(0, 30) }};
+            while time.time() - start < 45:
+                res = await page.evaluate(f"""() => {{
+                    const tc = document.body.innerText.normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
+                    if (!tc.includes("{chip[:10]}")) return "polling";
+                    if (tc.includes("não foram encontrados resultados") || tc.includes("nao existe nenhum animal") || tc.includes("sem registo")) return "siac_not_registered";
+                    if (tc.includes("encontra desaparecido") || tc.includes("animal desaparecido")) return "siac_missing";
+                    if (tc.includes("com registo") || tc.includes("registado no siac")) return "siac_registered";
+                    return "polling";
                 }}""")
-                
-                res = res_data["res"]
-                if res == "polling":
-                    if time.time() - start % 10 < 2:
-                        log(f"Aguardando... (Vê: {res_data.get('snippet')}...)")
-                
                 if res != "polling": 
                     log(f"Detectado: {res}")
                     return res
-                
-                if time.time() - start > 18 and not tried_click:
-                    log("Forçando submissão (CLIQUE ADICIONAL)...")
-                    try: 
-                        await page.click(submit_btn, timeout=3000)
-                        log("Clique no botão submetido.")
-                    except: 
-                        await page.keyboard.press("Enter")
-                        log("Enter enviado via teclado.")
-                    tried_click = True
                 await asyncio.sleep(2)
-            log("Timeout no portal SIAC (50s atingidos).")
+            log("Timeout no portal SIAC.")
             return "siac_error"
         except Exception as e:
             log(f"Erro: {str(e)[:50]}")
@@ -336,37 +309,18 @@ async def check_rnt_rnal_only(page, reg_id: str, log_func: Callable = None) -> s
         log(f"Validando no RNT ID {rid}...")
         await page.goto(url, timeout=60000, wait_until="domcontentloaded")
         await asyncio.sleep(8)
-        # Surgical frame extract
-        elements = [{"name": "Main", "obj": page}] + [{"name": f"Frame_{i}", "obj": f} for i, f in enumerate(page.frames)]
-        log(f"RNT: A pesquisar em {len(elements)} contextos.")
-        for entry in elements:
-            target = entry["obj"]
-            name = entry["name"]
+        for target in [page] + page.frames:
             try:
-                log(f"A examinar {name}...")
-                # Ensure target is a Frame or Page object before evaluate
-                if hasattr(target, 'evaluate'):
-                    morada = await target.evaluate("""() => {
-                        const tags = Array.from(document.querySelectorAll('.TableRecords_Label, .label, td, span, b, div, strong'));
-                        const l = tags.find(el => {
-                            const t = el.innerText.trim();
-                            return t === 'Morada' || t === 'Morada:';
-                        });
-                        if (l) {
-                            let text = "";
-                            if (l.tagName === 'TD' && l.nextElementSibling) text = l.nextElementSibling.innerText;
-                            else if (l.nextElementSibling) text = l.nextElementSibling.innerText;
-                            else text = l.parentElement.innerText.replace(/Morada:?/i, "");
-                            const v = text.trim();
-                            if (v.length > 5 && !v.includes('@')) return v;
-                        }
-                        return null;
-                    }""")
-                    if morada: 
-                        log(f"✅ Morada encontrada em {name}: {morada[:40]}")
-                        return morada.strip()
-            except Exception as e:
-                log(f"⚠️ Erro em {name}: {str(e)[:30]}")
+                morada = await target.evaluate("""() => {
+                    const l = Array.from(document.querySelectorAll('.TableRecords_Label, td, span, b, div')).find(el => el.innerText.trim().startsWith('Morada'));
+                    if (l) {
+                        if (l.tagName === 'TD' && l.nextElementSibling) return l.nextElementSibling.innerText.trim();
+                        return l.parentElement.innerText.replace(/Morada:?/i, "").trim();
+                    }
+                    return null;
+                }""")
+                if morada: return morada.strip()
+            except: continue
         return "❓ Sem Dados"
     except Exception as e: 
         log(f"Erro RNT: {str(e)[:40]}")
@@ -486,18 +440,23 @@ with t_siac:
     col_s1, col_s2 = st.columns(2)
     with col_s1:
         if st.button(t("btn_start"), key="run_siac", use_container_width=True):
-            gc = get_gspread_client()
-            if gc:
-                sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO SIAC")
-                if ws:
-                    f, c = ws.col_values(7)[1:], ws.col_values(8)[1:]
-                    rf, rc = ws.col_values(9)[1:], ws.col_values(10)[1:]
-                    items, exists = [], []
-                    for i in range(max(len(f), len(c))):
-                        if i < len(f): items.append(f[i]); exists.append(rf[i] if i < len(rf) else "...")
-                        if i < len(c): items.append(c[i]); exists.append(rc[i] if i < len(rc) else "...")
-                    asyncio.run(process_list_incremental(items, check_siac_on_page, ws, [9, 10], init_url=SIAC_URL, existing_data=exists))
-                    st.success(t("status_done"))
+            if not url_gs or not url_gs.startswith("http"): st.error(t("err_no_url"))
+            else:
+                gc = get_gspread_client()
+                if gc:
+                    with st.spinner("⏳ A abrir folha..."):
+                        try:
+                            sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO SIAC")
+                            if ws:
+                                f, c = ws.col_values(7)[1:], ws.col_values(8)[1:]
+                                rf, rc = ws.col_values(9)[1:], ws.col_values(10)[1:]
+                                items, exists = [], []
+                                for i in range(max(len(f), len(c))):
+                                    if i < len(f): items.append(f[i]); exists.append(rf[i] if i < len(rf) else "...")
+                                    if i < len(c): items.append(c[i]); exists.append(rc[i] if i < len(rc) else "...")
+                                asyncio.run(process_list_incremental(items, check_siac_on_page, ws, [9, 10], init_url=SIAC_URL, existing_data=exists))
+                                st.success(t("status_done"))
+                        except Exception as e: st.error(f"Erro ao abrir Google Sheet: {e}")
     with col_s2:
         if st.button(t("btn_clear_reg"), key="clear_siac", use_container_width=True):
             st.info(t("cleaning"))
@@ -521,24 +480,29 @@ with t_rnt:
     col_r1, col_r2 = st.columns(2)
     with col_r1:
         if st.button(t("btn_start"), key="run_rnt", use_container_width=True):
-            gc = get_gspread_client()
-            if gc:
-                sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO RNAL")
-                if ws:
-                    ads, regs = ws.col_values(1)[1:], ws.col_values(4)[1:]
-                    lo, lr, v = ws.col_values(3)[1:], ws.col_values(5)[1:], ws.col_values(6)[1:]
-                    items, exists = [], []
-                    for i in range(len(ads)):
-                        items.append((ads[i], regs[i]))
-                        exists.append((lo[i] if i<len(lo) else "", lr[i] if i<len(lr) else "", v[i] if i<len(v) else ""))
-                    
-                    async def al_checker(p, val, log_func):
-                        ad, reg = val
-                        lo = await check_olx_location(p, ad, log_func=log_func)
-                        lr = await check_rnt_rnal_only(p, reg, log_func=log_func)
-                        return lo, lr
-                    asyncio.run(process_list_incremental(items, al_checker, ws, [3, 5, 6], existing_data=exists))
-                    st.success(t("status_done"))
+            if not url_gs or not url_gs.startswith("http"): st.error(t("err_no_url"))
+            else:
+                gc = get_gspread_client()
+                if gc:
+                    with st.spinner("⏳ A abrir folha..."):
+                        try:
+                            sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO RNAL")
+                            if ws:
+                                ads, regs = ws.col_values(1)[1:], ws.col_values(4)[1:]
+                                lo, lr, v = ws.col_values(3)[1:], ws.col_values(5)[1:], ws.col_values(6)[1:]
+                                items, exists = [], []
+                                for i in range(len(ads)):
+                                    items.append((ads[i], regs[i]))
+                                    exists.append((lo[i] if i<len(lo) else "", lr[i] if i<len(lr) else "", v[i] if i<len(v) else ""))
+                                
+                                async def al_checker(p, val, log_func):
+                                    ad, reg = val
+                                    lo = await check_olx_location(p, ad, log_func=log_func)
+                                    lr = await check_rnt_rnal_only(p, reg, log_func=log_func)
+                                    return lo, lr
+                                asyncio.run(process_list_incremental(items, al_checker, ws, [3, 5, 6], existing_data=exists))
+                                st.success(t("status_done"))
+                        except Exception as e: st.error(f"Erro ao abrir Google Sheet: {e}")
     with col_r2:
         if st.button(t("btn_clear_loc"), key="clear_rnt", use_container_width=True):
             st.info(t("cleaning"))
@@ -560,13 +524,13 @@ with t_olx:
     col_o1, col_o2 = st.columns(2)
     with col_o1:
         if st.button(t("btn_start"), key="run_olx", use_container_width=True):
-            if not url_gs: st.error(t("err_no_url"))
+            if not url_gs or not url_gs.startswith("http"): st.error(t("err_no_url"))
             else:
                 gc = get_gspread_client()
                 if gc:
                     with st.spinner("⏳ A carregar dados do Sheets..."):
                         try:
-                            sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "KM CARROS")
+                            sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO Km")
                             if ws:
                                 ads = ws.col_values(1)[1:]; kms = ws.col_values(4)[1:]; v = ws.col_values(5)[1:]
                                 items, exists = [], []
@@ -575,14 +539,13 @@ with t_olx:
                                     exists.append((kms[i] if i<len(kms) else "", "", v[i] if i<len(v) else ""))
                                 asyncio.run(process_list_incremental(items, check_olx_km, ws, [4, 5], existing_data=exists))
                                 st.success(t("status_done"))
-                            else: st.error(t("err_no_sheet", "KM CARROS"))
-                        except Exception as e: st.error(f"Erro: {e}")
+                        except Exception as e: st.error(f"Erro API/URL: {e}")
     with col_o2:
         if st.button(t("btn_clear_mod"), key="clear_olx", use_container_width=True):
             with st.spinner(t("cleaning")):
                 gc = get_gspread_client()
                 if gc:
-                    sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "KM CARROS")
+                    sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO Km")
                     if ws:
                         vals = ws.get_all_values()
                         count = 0
