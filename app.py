@@ -258,9 +258,31 @@ def batch_clear_rows(ws, rows, condition_func):
 
 import time
 
+def normalize_id(val: Any) -> str:
+    """Converte qualquer ID (microchip ou RNAL) em string limpa, lidando com notação científica."""
+    if val is None: return ""
+    s = str(val).strip()
+    if not s or s.lower() == "nan": return ""
+    
+    # Remove .0 ou ,0 no final
+    if s.endswith(".0") or s.endswith(",0"): s = s[:-2]
+    
+    # Trata Notação Científica (ex: 6.20E+14)
+    if "E+" in s.upper() or "E-" in s.upper():
+        try:
+            # Converte via float e depois int para remover o .0
+            return str(int(float(s.replace(',', '.'))))
+        except: pass
+        
+    # Remove qualquer ponto residual se for puramente numérico e longo (Microchips)
+    if s.replace('.', '').replace(',', '').isdigit() and len(s) > 10:
+        return s.replace('.', '').replace(',', '')
+        
+    return s
+
 async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
-    """Valida um microchip no SIAC.pt com alta resiliência e sem bloqueios."""
-    chip = str(microchip).strip().split('.')[0].split(',')[0]
+    """Valida um microchip no SIAC.pt com alta resiliência."""
+    chip = normalize_id(microchip)
     if not chip or len(chip) < 10:
         return "❓ Formato Inválido"
 
@@ -337,11 +359,12 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
     return "⚠️ Erro SIAC"
 
 async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
-    """Validates car mileage on OLX with very robust text-based searching."""
-    if str(ad_id).isdigit():
-        ad_url = f"{OLX_BASE_URL}{ad_id}"
-    else:
-        ad_url = ad_id if str(ad_id).startswith('http') else f"{OLX_BASE_URL}d/anuncio/{ad_id}.html"
+    """Extrai os KM de um anúncio OLX."""
+    clean_id = normalize_id(ad_id)
+    if not clean_id or clean_id == "N/A": return "ERR_ID"
+    
+    if clean_id.isdigit(): ad_url = f"{OLX_BASE_URL}d/anuncio/{clean_id}.html"
+    else: ad_url = clean_id if clean_id.startswith('http') else f"{OLX_BASE_URL}d/anuncio/{clean_id}.html"
 
     for attempt in range(retries + 1):
         try:
@@ -406,14 +429,12 @@ async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
     return "⚠️ Erro OLX"
 
 async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
-    """Extracts the city/district location from an OLX ad."""
-    if not ad_id or str(ad_id).lower() == 'nan':
-        return "N/A"
+    """Extrai a localização (Cidade - Distrito) de um anúncio OLX."""
+    clean_id = normalize_id(ad_id)
+    if not clean_id or clean_id == "N/A": return "N/A"
 
-    if str(ad_id).isdigit():
-        ad_url = f"{OLX_BASE_URL}{ad_id}"
-    else:
-        ad_url = ad_id if str(ad_id).startswith('http') else f"{OLX_BASE_URL}d/anuncio/{ad_id}.html"
+    if clean_id.isdigit(): ad_url = f"{OLX_BASE_URL}d/anuncio/{clean_id}.html"
+    else: ad_url = clean_id if clean_id.startswith('http') else f"{OLX_BASE_URL}d/anuncio/{clean_id}.html"
 
     for attempt in range(retries + 1):
         try:
@@ -478,58 +499,51 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
     return "⚠️ Erro OLX"
 
 async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
-    """Valida um Alojamento Local no RNAL com seletores OutSystems de precisão."""
+    """Valida um Alojamento Local no RNAL com extração cirúrgica."""
     res = "❓ Sem Dados"
-    clean_id = str(reg_id).strip().split('.')[0]
+    clean_id = normalize_id(reg_id)
     rnal_url = f"{RNT_AL_DIRECT_URL}{clean_id}"
     
     for attempt in range(retries + 1):
         try:
-            # Sem bloqueio de recursos para garantir que os scripts OutSystems correm
+            # Networkidle é fundamental para sites ASPX/OutSystems
             await page.goto(rnal_url, timeout=90000, wait_until="networkidle")
-            await asyncio.sleep(6) 
+            await asyncio.sleep(8) # Latência extra para tabelas dinâmicas
             
-            # Extração focada nas classes específicas do portal
-            captured = await page.evaluate("""
-                () => {
-                    // Tenta o seletor mais específico do portal (TableRecords)
-                    const labelDivs = Array.from(document.querySelectorAll('.TableRecords_Label'));
-                    const moradaDiv = labelDivs.find(d => d.innerText.trim() === 'Morada');
-                    
-                    if (moradaDiv) {
-                        // O texto da morada está no pai (TD), basta remover o texto do label
-                        let fullText = moradaDiv.parentElement.innerText;
-                        return fullText.replace('Morada', '').trim();
-                    }
-                    
-                    // Fallback 1: Busca tabular genérica
-                    const ths = Array.from(document.querySelectorAll('th'));
-                    const moradaTh = ths.find(th => th.innerText.includes('Morada'));
-                    if (moradaTh) {
-                        let idx = Array.from(moradaTh.parentElement.cells).indexOf(moradaTh);
-                        let nextRow = moradaTh.closest('table').querySelector('tbody tr');
-                        if (nextRow && nextRow.cells[idx]) return nextRow.cells[idx].innerText;
-                    }
-
-                    // Fallback 2: Busca por texto bruto (com exclusão do footer)
-                    const mainContent = document.querySelector('#RichWidgets_wt7_block_wtMainContent') || document.body;
-                    const raw = mainContent.innerText;
-                    const m = raw.match(/Morada[:\\s]+([^\\n]+)/i);
-                    if (m && m[1].length > 10) return m[1].trim();
-
-                    return null;
-                }
-            """)
-
-            if captured and len(captured) > 5:
-                # Limpeza de ruído (newlines e espaços extras)
-                final = " ".join(captured.split())
-                if final.upper().endswith(" PORTUGAL"): final = final[:-9].strip()
-                return final
+            # Extração Multi-Frame: Itera sobre todos os frames para encontrar Morada
+            for frame in page.frames:
+                try:
+                    # Lógica específica para o Portal RNT
+                    captured = await frame.evaluate("""
+                        () => {
+                            // Método de Elite: Busca por classe OutSystems estável
+                            const labels = Array.from(document.querySelectorAll('.TableRecords_Label'));
+                            const morada = labels.find(l => l.innerText.includes('Morada'));
+                            if (morada && morada.parentElement) {
+                                return morada.parentElement.innerText.replace(/Morada/i, '').trim();
+                            }
+                            
+                            // Fallback 1: Tabelas Genéricas
+                            const cells = Array.from(document.querySelectorAll('td, th'));
+                            const target = cells.find(c => c.innerText.trim().toUpperCase() === 'MORADA');
+                            if (target) {
+                                if (target.nextElementSibling) return target.nextElementSibling.innerText.trim();
+                                let row = target.closest('tr');
+                                if (row && row.cells.length > 1) return row.cells[1].innerText.trim();
+                            }
+                            return null;
+                        }
+                    """)
+                    if captured and len(captured) > 5:
+                        # Limpeza profissional do resultado
+                        final = " ".join(captured.split())
+                        if final.upper().endswith(" PORTUGAL"): final = final[:-9].strip()
+                        return final
+                except: continue
 
             if attempt < retries:
                 await page.reload()
-                await asyncio.sleep(3)
+                await asyncio.sleep(4)
                 continue
                 
         except Exception:
@@ -612,14 +626,11 @@ async def process_list_incremental(
                 if browser: await browser.close()
                 await init_browser()
 
-            # Improved Cleaning: Handle tuples/lists vs single values
             if isinstance(val, (tuple, list)):
                 cleaned = val # Preserve for complex checkers
-                status_display = str(val[0])
+                status_display = normalize_id(val[0])
             else:
-                raw_str = str(val).strip()
-                if raw_str.endswith(".0"): cleaned = raw_str[:-2]
-                else: cleaned = raw_str
+                cleaned = normalize_id(val)
                 status_display = cleaned
             
             check_val = val[0] if isinstance(val, (tuple, list)) else val
@@ -789,9 +800,8 @@ with tab_rnt:
                     
                     async def al_checker(page, ids_tuple):
                         o_id, r_id = ids_tuple
-                        olx_loc = await check_olx_location(page, o_id)
-                        rnt_data = await check_rnt_rnal_only(page, r_id)
-                        # Return 3-tuple to match combined_existing format
+                        olx_loc = await check_olx_location(page, normalize_id(o_id))
+                        rnt_data = await check_rnt_rnal_only(page, normalize_id(r_id))
                         return (olx_loc, rnt_data, "")
 
                     with st.spinner(""):
