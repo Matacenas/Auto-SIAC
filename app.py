@@ -262,7 +262,7 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
             if SIAC_URL not in page.url:
                 await page.goto(SIAC_URL, timeout=60000, wait_until="networkidle")
 
-            # Clicar no campo de texto (espaço entre as setas) antes de escrever
+            # Clicar no campo de texto (espaço entre as setas) antes de escrever - Aprovado pelo user
             sel = "input[name='searchGtWro'], input[placeholder*='transponder']"
             await page.click(sel, timeout=5000)
             await page.keyboard.press("Control+A")
@@ -270,7 +270,7 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
             
             await page.keyboard.type(str(microchip), delay=60)
             await page.keyboard.press("Enter")
-            await asyncio.sleep(5.0) # Espera maior para resposta
+            await asyncio.sleep(5.0) # Espera estável aprovada
                 
             content = await page.content()
             if SIAC_TEXT_MISSING in content: return "siac_missing"
@@ -432,22 +432,26 @@ async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
             await page.goto(rnal_url, timeout=45000, wait_until="networkidle")
             await asyncio.sleep(3) # Give it time to load the record
             
-            # Search in all frames for address
+            # New RNAL extraction (per screenshots)
             for target in [page] + page.frames:
                 try:
-                    morada = await target.evaluate("""
+                    data = await target.evaluate("""
                         () => {
-                            const labels = Array.from(document.querySelectorAll('.TableRecords_Label, td, span, b, div'));
-                            const l = labels.find(el => el.innerText.trim().startsWith('Morada'));
-                            if (l) {
-                                if (l.tagName === 'TD' && l.nextElementSibling) return l.nextElementSibling.innerText.trim();
-                                return l.parentElement.innerText.replace(/Morada:?/i, "").trim();
-                            }
-                            return null;
+                            const cells = Array.from(document.querySelectorAll('td'));
+                            const parts = [];
+                            cells.forEach(td => {
+                                const labelDiv = td.querySelector('.TableRecords_Label');
+                                if (labelDiv) {
+                                    const label = labelDiv.innerText.trim();
+                                    const value = td.innerText.replace(label, '').trim();
+                                    if (value) parts.push(value);
+                                }
+                            });
+                            return parts.length > 2 ? parts.join(' - ') : null;
                         }
                     """)
-                    if morada and len(morada) > 5:
-                        res = morada.strip()
+                    if data:
+                        res = data
                         break
                 except: continue
             if res != "❓ Sem Dados": break
@@ -816,17 +820,20 @@ with tab_olx:
                             validation = t("km_missing_param")
                         
                         if validation == "...": # If not already set by error codes
-                            if found_km_str and found_km_str != "...":
+                            if found_km_str != "...":
                                 found_km_clean = "".join(filter(str.isdigit, found_km_str))
                                 
                                 if found_km_clean:
                                     if len(found_km_clean) >= 6:
+                                        # 6+ digits is the professional/corrected format (e.g., 143.940)
                                         validation = t("km_fixed")
-                                    elif len(found_km_clean) < 4:
+                                    elif len(found_km_clean) < 5:
+                                        # Less than 5 is definitely wrong/incomplete
                                         validation = t("km_wrong")
                                     else:
+                                        # 5 digits case: check if it matches the sheet prefix
                                         if sys_km_clean and sys_km_clean in found_km_clean:
-                                            validation = "CORRECTO"
+                                            validation = t("km_wrong") # Matches prefix but still in the "old/wrong" format
                                         else:
                                             validation = t("km_fixed")
                         
