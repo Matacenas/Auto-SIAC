@@ -258,9 +258,9 @@ def batch_clear_rows(ws, rows, condition_func):
 async def check_siac_on_page(page, microchip: str, retries: int = 2) -> str:
     """Validates a microchip on SIAC.pt. Returns a translation key or error string.
 
-    Uses JavaScript evaluate() to fill the form, bypassing Playwright's selector
-    engine. This is the most resilient approach for JS-heavy SPAs (Angular/React)
-    that have loading splash screens which can re-render and clear typed values.
+    Uses a hybrid approach (JS Focus + Hardware Keyboard typing) to bypass 
+    Angular's strict state management and invisible pointer-event interceptors 
+    that block normal Playwright locator interactions.
     """
     chip = str(microchip).strip()
     for attempt in range(retries + 1):
@@ -270,44 +270,63 @@ async def check_siac_on_page(page, microchip: str, retries: int = 2) -> str:
                 try:
                     await page.goto(SIAC_URL, timeout=90000, wait_until="load")
                 except Exception:
-                    pass  # Timeout from background analytics is fine — DOM is ready.
+                    pass  # Timeout from background analytics is fine.
 
-            # Step 2: Wait for the splash screen and Angular bootstrap to finish.
-            # SIAC.pt has a ~2s black loading overlay. We must not touch the form before it ends
-            # or the SPA re-renders the component and wipes whatever we typed.
-            await asyncio.sleep(3)
+            # Step 2: Wait for splash screen and Angular bootstrap.
+            await asyncio.sleep(4)
 
-            # Step 3: Inject the microchip number directly via JavaScript.
-            # This finds the transponder input by placeholder text (known: '0 | 15') or type,
-            # then fires Angular/React/Vue change events so the framework registers the value.
-            await page.evaluate(f"""
-                () => {{
-                    const inputs = Array.from(document.querySelectorAll('input'));
-                    const inp = inputs.find(i =>
-                                    i.placeholder && (
-                                        i.placeholder.toLowerCase().includes('transponder') ||
-                                        i.placeholder.toLowerCase().includes('chip') ||
-                                        i.placeholder.includes('15')
-                                    )
-                                )
-                                || inputs.find(i => i.type === 'text')
-                                || inputs[0];
-                    if (inp) {{
+            # Step 3: Find the iframe containing the form, if any.
+            target_frame = page
+            for f in page.frames:
+                try:
+                    inps = await f.evaluate("() => document.querySelectorAll('input').length")
+                    if inps > 0:
+                        target_frame = f
+                        break
+                except Exception:
+                    continue
+
+            # Step 4: Force focus via JS (bypassing Playwright interceptability checks)
+            # Find input by placeholder "0 |" or "transponder" or fallback to first text input
+            focus_script = """
+                () => {
+                    const inps = Array.from(document.querySelectorAll('input'));
+                    const inp = inps.find(i => i.placeholder && i.placeholder.includes('0 |')) 
+                             || inps.find(i => i.type === 'text') 
+                             || inps[0];
+                    if (inp) {
+                        inp.value = ''; // clear first
                         inp.focus();
-                        inp.value = '';
-                        inp.dispatchEvent(new Event('input',  {{ bubbles: true }}));
-                        inp.value = '{chip}';
-                        inp.dispatchEvent(new Event('input',  {{ bubbles: true }}));
-                        inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    }}
-                }}
+                        return true;
+                    }
+                    return false;
+                }
+            """
+            focused = await target_frame.evaluate(focus_script)
+            
+            if not focused:
+                raise Exception("Input field not found in DOM")
+
+            # Step 5: Hardware Keyboard Typing (Crucial for Angular validation)
+            # Type slowly so Angular's reactive form registers the pristine/dirty state change
+            await page.keyboard.type(chip, delay=80)
+            await asyncio.sleep(1)
+
+            # Step 6: Trigger Search
+            # Try JS direct click first on the correct button, fallback to Enter key
+            await target_frame.evaluate("""
+                () => {
+                    const btn = document.querySelector('button.form-control-button.btn.btn-primary:not(.clear-btn)');
+                    if (btn) btn.click();
+                }
             """)
-
-            # Step 4: Submit and wait for the result.
+            await asyncio.sleep(1)
             await page.keyboard.press("Enter")
-            await asyncio.sleep(5)  # SIAC typically responds within 3-5 seconds
 
-            content = await page.content()
+            # Step 7: Wait for SIAC to respond (usually 4-6 seconds)
+            await asyncio.sleep(6)
+
+            content = await target_frame.content()
             if SIAC_TEXT_MISSING in content:        return "siac_missing"
             if SIAC_TEXT_REGISTERED in content:     return "siac_registered"
             if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
