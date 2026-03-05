@@ -257,52 +257,60 @@ def batch_clear_rows(ws, rows, condition_func):
 
 import time
 
-async def check_siac_on_page(page, microchip: str, retries: int = 2) -> str:
-    """Valida um microchip no SIAC.pt usando o método mais simples e direto.
-    
-    Seguindo o feedback do utilizador:
-    1. Espera o splash screen (2.5s).
-    2. Faz 'copy-paste' (fill()) no campo.
-    3. Aguarda que o resultado apareça automaticamente (sem cliques ou Enter).
+async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
+    """Valida um microchip no SIAC.pt usando o método copy-paste manual.
     """
     chip = str(microchip).strip()
     for attempt in range(retries + 1):
         try:
-            # Garante que estamos na página correta
             if SIAC_URL not in page.url:
                 try:
                     await page.goto(SIAC_URL, timeout=60000, wait_until="load")
                 except Exception:
                     pass
 
-            # Tempo para o splash screen desaparecer e o Angular estabilizar
+            # Tempo para o splash screen desaparecer (Feedback do user: 2.5s)
             await asyncio.sleep(2.5)
 
-            # Localiza o input usando o placeholder visto nas imagens
-            input_selector = 'input[placeholder*="transponder"], input[placeholder*="0 |"], input[type="text"]'
+            # Localizador baseado no placeholder exacto das imagens do utilizador
+            # Tentamos o placeholder exacto, depois variantes
+            input_locator = page.get_by_placeholder("Indique o num. transponder")
             
-            # Preenche o campo (equivale ao copy-pasting)
-            await page.locator(input_selector).first.fill(chip)
+            # Se não encontrar pelo placeholder exacto, tenta o seletor genérico
+            if await input_locator.count() == 0:
+                input_locator = page.locator('input[placeholder*="transponder"], input[placeholder*="0 |"], input[type="text"]')
+
+            # Clique para focar (essencial para simular o comportamento humano do copy-paste)
+            await input_locator.first.click()
+            await asyncio.sleep(0.2)
             
-            # Aguarda a mensagem de validação aparecer (máximo 8 segundos)
-            # O SIAC valida automaticamente ao preencher 15 dígitos
-            start_poll = asyncio.get_event_loop().time()
-            while asyncio.get_event_loop().time() - start_poll < 8:
+            # Preenchimento direto (copy-paste)
+            await input_locator.first.fill(chip)
+            
+            # Polling para detectar a resposta automática do Angular
+            start_poll = time.time()
+            while time.time() - start_poll < 10:
                 content = await page.content()
                 if SIAC_TEXT_MISSING in content:        return "siac_missing"
                 if SIAC_TEXT_REGISTERED in content:     return "siac_registered"
                 if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
                 await asyncio.sleep(0.5)
 
-            # Se não encontrou nada, tenta recarregar na próxima tentativa
             if attempt < retries:
                 await page.reload()
+                await asyncio.sleep(2)
                 continue
                 
             return "siac_unknown"
             
-        except Exception:
+        except Exception as e:
+            # Em caso de erro, guardamos num log temporário para debug
+            with open("siac_last_error.txt", "a") as f:
+                 f.write(f"Attempt {attempt} for {chip}: {str(e)}\n")
+            
             if attempt < retries:
+                try: await page.goto(SIAC_URL, timeout=60000, wait_until="load")
+                except Exception: pass
                 await asyncio.sleep(2)
                 continue
             return "⚠️ Erro SIAC"
