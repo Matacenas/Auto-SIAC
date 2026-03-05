@@ -228,21 +228,27 @@ async def check_siac_on_page(page, microchip: str, log_func: Callable = None) ->
             await page.keyboard.press("Enter")
             log(f"Consultando chip {chip}...")
             
-            # Polling for result
+            # Polling for result (Increased timeout and flexible matching)
             start = time.time()
-            while time.time() - start < 15:
+            tried_click = False
+            while time.time() - start < 35:
                 res = await page.evaluate(f"""() => {{
                     const t = document.body.innerText;
-                    if (t.includes("{SIAC_TEXT_MISSING}")) return "siac_missing";
-                    if (t.includes("{SIAC_TEXT_REGISTERED}") || t.includes("com registo no SIAC")) return "siac_registered";
-                    if (t.includes("{SIAC_TEXT_NOT_REGISTERED}") || t.includes("sem registo")) return "siac_not_registered";
+                    const clean = (s) => s.normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
+                    const tc = clean(t);
+                    if (tc.includes("desaparecido") || tc.includes("encontra desaparecido")) return "siac_missing";
+                    if (tc.includes("com registo") || tc.includes("animal com registo")) return "siac_registered";
+                    if (tc.includes("sem registo") || tc.includes("animal sem registo")) return "siac_not_registered";
                     return "polling";
                 }}""")
-                if res != "polling": 
-                    log(f"Resultado: {res}")
-                    return res
-                await asyncio.sleep(1)
-            log("Timeout no portal SIAC.")
+                if res != "polling": return res
+                
+                # If stuck after 10s, try clicking the button again
+                if time.time() - start > 12 and not tried_click:
+                    await page.keyboard.press("Enter")
+                    tried_click = True
+                await asyncio.sleep(1.5)
+            log("Timeout no portal SIAC (35s).")
             return "siac_error"
         except Exception as e:
             log(f"Erro: {str(e)[:50]}")
@@ -308,32 +314,34 @@ async def check_rnt_rnal_only(page, reg_id: str, log_func: Callable = None) -> s
             try:
                 morada = await target.evaluate("""() => {
                     const findValue = (label) => {
-                        const all = Array.from(document.querySelectorAll('.TableRecords_Label, td, span, div'));
-                        const l = all.find(el => el.innerText.trim() === label || el.innerText.trim() === label + ':');
+                        const all = Array.from(document.querySelectorAll('.TableRecords_Label, td, span, div, b'));
+                        const l = all.find(el => {
+                            const t = el.innerText.trim();
+                            return (t === label || t === label + ':') && !el.innerText.toLowerCase().includes('email');
+                        });
                         if (!l) return null;
                         
-                        // Check next sibling (Table format)
-                        if (l.nextElementSibling && l.tagName === 'TD') return l.nextElementSibling.innerText.trim();
+                        // Table format check
+                        if (l.nextElementSibling && (l.tagName === 'TD' || l.tagName === 'B')) return l.nextElementSibling.innerText.trim();
                         
-                        // Check parent's innerText (Label + Value format)
+                        // Label: Value format check in same line
                         const pText = l.parentElement.innerText;
                         const match = pText.match(new RegExp(label + ":?\\\\s*(.*)", "i"));
-                        return match ? match[1].trim() : null;
+                        if (match && match[1].trim().length > 3) return match[1].trim();
+                        
+                        // Fallback: look at next element in DOM
+                        const next = l.nextSibling;
+                        if (next && next.nodeType === 3) return next.textContent.trim();
+                        return null;
                     };
                     
                     const m = findValue('Morada');
-                    // Prevent catching email by checking if it contains '@' and no spaces (heuristic)
-                    if (m && m.length > 5) {
-                        if (m.includes('@') && !m.includes(' ')) return "REJECTED_EMAIL";
-                        return m;
-                    }
+                    // Stricter anti-email: must NOT contain @ if it's supposed to be a physical address (or have spaces)
+                    if (m && m.length > 5 && (m.includes(' ') || !m.includes('@'))) return m;
                     return null;
                 }""")
-                if morada == "REJECTED_EMAIL":
-                    log("Aviso: Detectado email no campo Morada, ignorando...")
-                    continue
                 if morada: 
-                    log(f"Morada detectada: {morada[:30]}...")
+                    log(f"Morada encontrada: {morada[:50]}...")
                     return morada.strip()
             except: continue
         return "❓ Sem Dados"
@@ -389,14 +397,25 @@ async def process_list_incremental(items, checker_func, ws, col_mappings, init_u
         page = await context.new_page()
         
         for i, val in enumerate(items):
-            # Skip Logic
+            # Granular Skip Logic
+            to_skip = False
             if existing_data and i < len(existing_data):
                 raw = existing_data[i]
-                if isinstance(raw, (list, tuple)):
-                    if len(raw) > 2 and raw[2] in [t("val_correct"), t("val_wrong")]:
-                        log(f"Linha {i+2}: Já validada. Saltando."); pb.progress((i+1)/total); continue
-                elif str(raw).strip() not in ["...", "N/A", "", "nan"]:
-                    log(f"Linha {i+2}: Já preenchida. Saltando."); pb.progress((i+1)/total); continue
+                # SIAC (interleaved)
+                if col_mappings == [9, 10]:
+                    if str(raw).strip() in [t("siac_registered"), t("siac_not_registered"), t("siac_missing")]: to_skip = True
+                # RNAL (check validation column)
+                elif col_mappings == [3, 5, 6]:
+                    if isinstance(raw, (list, tuple)) and len(raw) > 2:
+                        if str(raw[2]).strip() in [t("val_correct"), t("val_wrong")]: to_skip = True
+                # OLX
+                elif col_mappings == [4, 5]:
+                    if isinstance(raw, (list, tuple)) and len(raw) > 2:
+                        if str(raw[2]).strip() in [t("km_fixed"), "CORRECTO"]: to_skip = True
+                    elif str(raw).strip() not in ["...", "N/A", "", "nan"]: to_skip = True
+            
+            if to_skip:
+                log(f"Linha {i+2}: Já validada."); pb.progress((i+1)/total); continue
 
             if i > 0 and i % refresh_every == 0:
                 log("Refresh periódico do contexto...")
@@ -406,7 +425,8 @@ async def process_list_incremental(items, checker_func, ws, col_mappings, init_u
             if not cid: res = "N/A"
             else:
                 try:
-                    if page.is_closed(): await browser.new_context(); page = await context.new_page()
+                    if page.is_closed(): 
+                        context = await browser.new_context(); page = await context.new_page()
                     res = await checker_func(page, cid if not isinstance(val, (tuple, list)) else val, log_func=log, **extra_params)
                 except Exception as e:
                     log(f"ERRO DE MOTOR: {str(e)[:50]}"); res = "Error"
@@ -438,19 +458,37 @@ t_siac, t_rnt, t_olx = st.tabs([t("siac_tab"), t("rnal_tab"), t("olx_tab")])
 with t_siac:
     st.subheader(t("siac_sub"))
     st.info(t("dica_siac"))
-    if st.button(t("btn_start"), key="run_siac"):
-        gc = get_gspread_client()
-        if gc:
-            sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO SIAC")
-            if ws:
-                f, c = ws.col_values(7)[1:], ws.col_values(8)[1:]
-                rf, rc = ws.col_values(9)[1:], ws.col_values(10)[1:]
-                items, exists = [], []
-                for i in range(max(len(f), len(c))):
-                    if i < len(f): items.append(f[i]); exists.append(rf[i] if i < len(rf) else "...")
-                    if i < len(c): items.append(c[i]); exists.append(rc[i] if i < len(rc) else "...")
-                asyncio.run(process_list_incremental(items, check_siac_on_page, ws, [9, 10], init_url=SIAC_URL, existing_data=exists))
-                st.success(t("status_done"))
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        if st.button(t("btn_start"), key="run_siac", use_container_width=True):
+            gc = get_gspread_client()
+            if gc:
+                sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO SIAC")
+                if ws:
+                    f, c = ws.col_values(7)[1:], ws.col_values(8)[1:]
+                    rf, rc = ws.col_values(9)[1:], ws.col_values(10)[1:]
+                    items, exists = [], []
+                    for i in range(max(len(f), len(c))):
+                        if i < len(f): items.append(f[i]); exists.append(rf[i] if i < len(rf) else "...")
+                        if i < len(c): items.append(c[i]); exists.append(rc[i] if i < len(rc) else "...")
+                    asyncio.run(process_list_incremental(items, check_siac_on_page, ws, [9, 10], init_url=SIAC_URL, existing_data=exists))
+                    st.success(t("status_done"))
+    with col_s2:
+        if st.button(t("btn_clear_reg"), key="clear_siac", use_container_width=True):
+            st.info(t("cleaning"))
+            gc = get_gspread_client()
+            if gc:
+                sh = gc.open_by_url(url_gs); ws = get_worksheet_by_name(sh, "AUTO SIAC")
+                if ws:
+                    f, c = ws.col_values(9)[1:], ws.col_values(10)[1:]
+                    count = 0
+                    reg_text = t("siac_registered")
+                    # Iterate backwards to avoid index shifting
+                    for i in range(len(f) - 1, -1, -1):
+                        if i < len(c) and f[i] == reg_text and c[i] == reg_text:
+                            ws.delete_rows(i + 2)
+                            count += 1
+                    st.success(t("rows_removed", count))
 
 with t_rnt:
     st.subheader(t("rnal_sub"))
@@ -517,7 +555,10 @@ with t_olx:
                 if ws:
                     vals = ws.get_all_values()
                     count = 0
-                    for i, row in enumerate(vals[1:], 2):
-                        if i <= len(vals) and len(row) >= 5 and (row[4] == t("km_fixed") or row[4] == t("km_moderated") or row[4] == t("km_inactive")):
-                            ws.delete_rows(i); count += 1
+                    # Iterate backwards to avoid index shifting
+                    for i in range(len(vals) - 1, 0, -1):
+                        row = vals[i]
+                        if len(row) >= 5 and (row[4] == t("km_fixed") or row[4] == t("km_moderated") or row[4] == t("km_inactive")):
+                            ws.delete_rows(i + 1)
+                            count += 1
                     st.success(t("rows_removed", count))
