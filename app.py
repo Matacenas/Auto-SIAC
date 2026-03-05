@@ -186,8 +186,13 @@ def get_worksheet_by_name(sh, target_name):
     try:
         ts = [ws.title for ws in sh.worksheets()]
         match = next((tt for tt in ts if tt.strip().lower() == target_name.strip().lower()), None)
-        return sh.worksheet(match) if match else None
-    except: return None
+        if not match:
+            st.error(f"Aba '{target_name}' não encontrada! Abas disponíveis: {', '.join(ts)}")
+            return None
+        return sh.worksheet(match)
+    except Exception as e:
+        st.error(f"Erro ao aceder abas: {e}")
+        return None
 
 def normalize_id(val: Any) -> str:
     if val is None: return ""
@@ -214,46 +219,61 @@ async def check_siac_on_page(page, microchip: str, log_func: Callable = None) ->
                 await asyncio.sleep(4)
             
             sel = "input[name='searchGtWro'], input[placeholder*='transponder']"
+            submit_btn = "button[type='submit'], .btn-primary, .submit"
             await page.evaluate("""([s, v]) => {
                 const el = document.querySelector(s);
                 if (el) { 
                     el.value = v; 
                     el.dispatchEvent(new Event('input', {bubbles:true})); 
                     el.dispatchEvent(new Event('change', {bubbles:true})); 
-                    el.focus(); 
                     return true; 
                 }
                 return false;
             }""", [sel, chip])
-            await page.keyboard.press("Enter")
+            
             log(f"Consultando chip {chip}...")
+            # Tentativa de clique real no botão
+            try: await page.click(submit_btn, timeout=5000)
+            except: await page.keyboard.press("Enter")
             
             # Polling for result (Resilient & Sequential)
             start = time.time()
             tried_click = False
             while time.time() - start < 50:
-                res = await page.evaluate(f"""() => {{
-                    const clean = (s) => s.normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
+                res_data = await page.evaluate(f"""() => {{
                     const text = document.body.innerText;
+                    const clean = (s) => s.normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
                     const tc = clean(text);
                     
-                    // IF the chip isn't even in the page, it hasn't loaded or it's a blank search
-                    if (!tc.includes("{chip[:10]}")) return "polling";
+                    if (!tc.includes("{chip[:10]}")) return {{ res: "polling", snippet: text.substring(0, 30) }};
                     
-                    if (tc.includes("não foram encontrados resultados") || tc.includes("nao existe nenhum animal") || tc.includes("sem registo")) return "siac_not_registered";
-                    if (tc.includes("encontra desaparecido") || tc.includes("animal desaparecido")) return "siac_missing";
-                    if (tc.includes("com registo") || tc.includes("registado no siac")) return "siac_registered";
+                    if (tc.includes("não foram encontrados resultados") || tc.includes("nao existe nenhum animal") || tc.includes("sem registo")) 
+                        return {{ res: "siac_not_registered" }};
+                    if (tc.includes("encontra desaparecido") || tc.includes("animal desaparecido")) 
+                        return {{ res: "siac_missing" }};
+                    if (tc.includes("com registo") || tc.includes("registado no siac")) 
+                        return {{ res: "siac_registered" }};
                     
-                    return "polling";
+                    return {{ res: "polling", snippet: text.substring(0, 30) }};
                 }}""")
                 
+                res = res_data["res"]
+                if res == "polling":
+                    if time.time() - start % 10 < 2:
+                        log(f"Aguardando... (Vê: {res_data.get('snippet')}...)")
+                
                 if res != "polling": 
-                    log(f"Encontrado: {res}")
+                    log(f"Detectado: {res}")
                     return res
                 
-                if time.time() - start > 15 and not tried_click:
-                    log("A tentar forçar submissão...")
-                    await page.keyboard.press("Enter")
+                if time.time() - start > 18 and not tried_click:
+                    log("Forçando submissão (CLIQUE ADICIONAL)...")
+                    try: 
+                        await page.click(submit_btn, timeout=3000)
+                        log("Clique no botão submetido.")
+                    except: 
+                        await page.keyboard.press("Enter")
+                        log("Enter enviado via teclado.")
                     tried_click = True
                 await asyncio.sleep(2)
             log("Timeout no portal SIAC (50s atingidos).")
@@ -317,33 +337,36 @@ async def check_rnt_rnal_only(page, reg_id: str, log_func: Callable = None) -> s
         await page.goto(url, timeout=60000, wait_until="domcontentloaded")
         await asyncio.sleep(8)
         # Surgical frame extract
-        elements = [page] + page.frames
-        for target in elements:
+        elements = [{"name": "Main", "obj": page}] + [{"name": f"Frame_{i}", "obj": f} for i, f in enumerate(page.frames)]
+        log(f"RNT: A pesquisar em {len(elements)} contextos.")
+        for entry in elements:
+            target = entry["obj"]
+            name = entry["name"]
             try:
-                morada = await target.evaluate("""() => {
-                    const all = Array.from(document.querySelectorAll('.TableRecords_Label, td, span, b, div'));
-                    const l = all.find(el => el.innerText.trim() === 'Morada' || el.innerText.trim() === 'Morada:');
-                    if (l) {
-                        // Priority 1: Next TD sibling
-                        if (l.tagName === 'TD' && l.nextElementSibling) {
-                            const v = l.nextElementSibling.innerText.trim();
+                log(f"A examinar {name}...")
+                # Ensure target is a Frame or Page object before evaluate
+                if hasattr(target, 'evaluate'):
+                    morada = await target.evaluate("""() => {
+                        const tags = Array.from(document.querySelectorAll('.TableRecords_Label, .label, td, span, b, div, strong'));
+                        const l = tags.find(el => {
+                            const t = el.innerText.trim();
+                            return t === 'Morada' || t === 'Morada:';
+                        });
+                        if (l) {
+                            let text = "";
+                            if (l.tagName === 'TD' && l.nextElementSibling) text = l.nextElementSibling.innerText;
+                            else if (l.nextElementSibling) text = l.nextElementSibling.innerText;
+                            else text = l.parentElement.innerText.replace(/Morada:?/i, "");
+                            const v = text.trim();
                             if (v.length > 5 && !v.includes('@')) return v;
                         }
-                        // Priority 2: Parent inner text (label: value)
-                        const pText = l.parentElement.innerText;
-                        const match = pText.match(/Morada:?\s*(.*)/i);
-                        if (match && match[1].trim().length > 5 && !match[1].includes('@')) return match[1].trim();
-                        
-                        // Priority 3: Any sibling in flow
-                        let next = l.nextElementSibling || l.parentElement.nextElementSibling;
-                        if (next && next.innerText.length > 5 && !next.innerText.includes('@')) return next.innerText.trim();
-                    }
-                    return null;
-                }""")
-                if morada: 
-                    log(f"Encontrado RNT: {morada[:40]}")
-                    return morada.strip()
-            except: continue
+                        return null;
+                    }""")
+                    if morada: 
+                        log(f"✅ Morada encontrada em {name}: {morada[:40]}")
+                        return morada.strip()
+            except Exception as e:
+                log(f"⚠️ Erro em {name}: {str(e)[:30]}")
         return "❓ Sem Dados"
     except Exception as e: 
         log(f"Erro RNT: {str(e)[:40]}")
