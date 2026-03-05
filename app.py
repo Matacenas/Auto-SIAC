@@ -564,16 +564,16 @@ async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
 async def process_list_incremental(
     items: List[Any], 
     checker_func: Callable, 
+    ws: Any, # Worksheet object passed directly
+    col_mappings: List[int], # List of columns to update
     init_url: Optional[str] = None,
-    existing_results: Optional[List[Any]] = None, 
-    callback: Optional[Callable[[List[Any]], Awaitable[None]]] = None, 
-    batch_size: int = 10, 
     refresh_every: int = 50,
     **extra_params
 ) -> List[Any]:
-    results: List[Any] = list(existing_results) if existing_results else ["..."] * len(items)
+    total = len(items)
     progress_bar = st.progress(0)
     status_text = st.empty()
+    results = ["..."] * total
     
     async with async_playwright() as p:
         browser, context, page = None, None, None
@@ -583,73 +583,55 @@ async def process_list_incremental(
                 try: await browser.close()
                 except: pass
             
-            # Lançamento otimizado para Streamlit Cloud (Baixa RAM)
-            launch_args = [
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--no-first-run",
-                "--no-zygote",
-                "--single-process" # Fundamental para economizar RAM em ambientes containerizados
-            ]
-            
-            try:
-                browser = await p.chromium.launch(headless=True, args=launch_args)
-            except Exception:
+            launch_args = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--single-process"]
+            try: browser = await p.chromium.launch(headless=True, args=launch_args)
+            except:
                 os.system("playwright install chromium")
                 browser = await p.chromium.launch(headless=True, args=launch_args)
                 
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 800},
-            )
-            context.set_default_timeout(60000)
+            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", viewport={"width": 1280, "height": 800})
             page = await context.new_page()
             if init_url:
-                try:
-                    await page.goto(init_url, timeout=90000, wait_until="load")
-                except Exception:
-                    pass  # Proceed even if load times out (background scripts)
+                try: await page.goto(init_url, timeout=60000, wait_until="load")
+                except: pass
 
         await init_browser()
-        total = len(items)
+        
         for i, val in enumerate(items):
-            # Skip if we have a result. Placeholder "..." or empty string doesn't count.
-            # Skip if we have a definitive result. Placeholder "..." or empty string doesn't count.
-            terminal_states = ["✅", "❌", "🚩"]
-            val_to_check = str(results[i][1]) if isinstance(results[i], (tuple, list)) else str(results[i])
-            has_result = any(s in val_to_check for s in terminal_states)
-            if i < len(results) and has_result:
-                progress_bar.progress((i + 1) / total)
-                continue
-
             if i > 0 and i % refresh_every == 0:
-                status_text.text(t("restarting_browser"))
-                if page: await page.close()
-                if context: await context.close()
-                if browser: await browser.close()
                 await init_browser()
 
-            if isinstance(val, (tuple, list)):
-                cleaned = val # Preserve for complex checkers
-                status_display = normalize_id(val[0])
+            cleaned = normalize_id(val[0] if isinstance(val, (tuple, list)) else val)
+            if not cleaned or cleaned.lower() == "nan":
+                res = "N/A"
             else:
-                cleaned = normalize_id(val)
-                status_display = cleaned
-            
-            check_val = val[0] if isinstance(val, (tuple, list)) else val
-            if not str(check_val).strip() or str(check_val).lower() == "nan": res = "N/A"
-            else:
-                status_text.text(t("status_working", status_display))
-                if page and page.is_closed(): await init_browser()
-                res = await checker_func(page, cleaned, **extra_params)
+                status_text.text(t("status_working", cleaned))
+                if page.is_closed(): await init_browser()
+                res = await checker_func(page, cleaned if not isinstance(val, (tuple, list)) else val, **extra_params)
             
             results[i] = res
-            progress_bar.progress((i + 1) / total)
-            if callback and (i + 1) % batch_size == 0: await callback(results)
             
-        if callback: await callback(results)
+            # ATUALIZAÇÃO DIRETA NA FOLHA (Robustez Máxima)
+            try:
+                row_idx = (i // 2 if col_mappings == [9, 10] else i) + 2
+                if isinstance(res, (tuple, list)): # Para RNAL (OLX Loc, RNT Data)
+                    ws.update_cell(row_idx, col_mappings[0], res[0])
+                    ws.update_cell(row_idx, col_mappings[1], res[1])
+                    # Auto-validação para RNAL
+                    olx_l, rnt_l = str(res[0]).lower(), str(res[1]).lower()
+                    if "sem dados" in rnt_l or not rnt_l: v = t("val_waiting")
+                    elif olx_l != "n/a" and any(word in rnt_l for word in olx_l.split() if len(word) > 3): v = t("val_correct")
+                    else: v = t("val_wrong")
+                    ws.update_cell(row_idx, col_mappings[2], v)
+                else: # Para SIAC ou OLX Km
+                    val_to_write = t(res) if "siac_" in str(res) else res
+                    # SIAC Interleaved Logic: i=0,2,4... -> Col 9 | i=1,3,5... -> Col 10
+                    target_col = col_mappings[0] if i % 2 == 0 else col_mappings[1] if len(col_mappings) > 1 else col_mappings[0]
+                    ws.update_cell(row_idx, target_col, val_to_write)
+            except: pass 
+            
+            progress_bar.progress((i + 1) / total)
+            
         if browser: await browser.close()
     return results
 
@@ -694,23 +676,12 @@ with tab_siac:
                             interleaved.append(crias[i])
                             existing_results.append(res_crias[i] if i < len(res_crias) else "...")
                     
-                    async def update_siac_gs(res):
-                        ptr, sf, sc = 0, [], []
-                        for i in range(rows):
-                            if i < len(femeas): sf.append([t(res[ptr]) if "siac_" in str(res[ptr]) else res[ptr]]); ptr += 1
-                            else: sf.append(["N/A"])
-                            if i < len(crias): sc.append([t(res[ptr]) if "siac_" in str(res[ptr]) else res[ptr]]); ptr += 1
-                            else: sc.append(["N/A"])
-                        gc_i = get_gspread_client()
-                        if gc_i:
-                            sh_i = gc_i.open_by_url(url_gs)
-                            ws_i = get_worksheet_by_name(sh_i, "AUTO SIAC")
-                            if ws_i:
-                                ws_i.update(range_name=f"I2:I{1+len(sf)}", values=sf)
-                                ws_i.update(range_name=f"J2:J{1+len(sc)}", values=sc)
-
                     with st.spinner(""):
-                        asyncio.run(process_list_incremental(interleaved, check_siac_on_page, init_url=SIAC_URL, callback=update_siac_gs, existing_results=existing_results))
+                        # O processo SIAC requer mapeamento especial para I (9) e J (10) dependendo se é femea ou cria
+                        # Como interleaved mistura ambos, precisamos de uma lógica linear simples dentro do loop
+                        # Mas para simplificar AGORA e garantir que os dados caem, vamos processar linearmente.
+                        # Na verdade, a melhor forma é passar a worksheet e deixar o motor gravar.
+                        asyncio.run(process_list_incremental(interleaved, check_siac_on_page, ws=ws, col_mappings=[9, 10], init_url=SIAC_URL))
                     st.success(t("status_done"))
                 except Exception as e: st.error(f"Erro: {e}")
 
@@ -774,44 +745,15 @@ with tab_rnt:
                         # We use existing_val for skipping.
                         combined_existing.append((existing_olx_loc[i], existing_rnal_data[i], existing_val[i]))
                     
-                    async def update_al_gs(results):
-                        # results is a list of (found_olx, found_rnal, ?validation)
-                        gc_u = get_gspread_client()
-                        if gc_u:
-                            sh_u = gc_u.open_by_url(url_gs)
-                            ws_u = get_worksheet_by_name(sh_u, "AUTO RNAL")
-                            if ws_u:
-                                olx_formatted = [[r[0]] for r in results]
-                                rnal_formatted = [[r[1]] for r in results]
-                                val_formatted = []
-                                for r in results:
-                                    # If it already has a thumb/check/flag in the 3rd index, keep it
-                                    if len(r) > 2 and any(s in str(r[2]) for s in ["✅", "❌", "🚩"]):
-                                        val_formatted.append([r[2]])
-                                        continue
-                                        
-                                    olx_l, rnt_l = str(r[0]).lower(), str(r[1]).lower()
-                                    if rnt_l == "n/a" or not rnt_l or "sem dados" in rnt_l:
-                                        val_formatted.append([t("val_waiting")])
-                                    elif any(s in str(r[0]) or s in str(r[1]) for s in ["...", "⚠️", "❓"]):
-                                        val_formatted.append(["..."])
-                                    elif olx_l != "n/a" and any(word in rnt_l for word in olx_l.split() if len(word) > 3): 
-                                        val_formatted.append([t("val_correct")])
-                                    else: val_formatted.append([t("val_wrong")])
-                                    
-                                ws_u.update(range_name=f"C2:C{1+len(olx_formatted)}", values=olx_formatted) # OLX Loc
-                                ws_u.update(range_name=f"E2:E{1+len(rnal_formatted)}", values=rnal_formatted) # RNAL Data
-                                ws_u.update(range_name=f"F2:F{1+len(val_formatted)}", values=val_formatted) # Validation
-                    
                     async def al_checker(page, ids_tuple):
                         o_id, r_id = ids_tuple
                         olx_loc = await check_olx_location(page, normalize_id(o_id))
                         rnt_data = await check_rnt_rnal_only(page, normalize_id(r_id))
-                        return (olx_loc, rnt_data, "")
+                        return (olx_loc, rnt_data)
 
                     with st.spinner(""):
                         combined_ids = list(zip(olx_ids, rnal_ids))
-                        asyncio.run(process_list_incremental(combined_ids, al_checker, callback=update_al_gs, existing_results=combined_existing))
+                        asyncio.run(process_list_incremental(combined_ids, al_checker, ws=ws, col_mappings=[3, 5, 6]))
                     st.success(t("status_done"))
                     st.balloons()
                 except Exception as e: st.error(f"Erro: {e}")
