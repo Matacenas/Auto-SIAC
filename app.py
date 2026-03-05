@@ -258,25 +258,20 @@ def batch_clear_rows(ws, rows, condition_func):
 import time
 
 async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
-    """Valida um microchip no SIAC.pt de forma ultra-robusta.
-    """
-    # Limpa o número (remove decimais .0 do Excel/Pandas)
+    """Valida um microchip no SIAC.pt de forma ultra-robusta com screenshots de erro."""
     chip = str(microchip).strip().split('.')[0].split(',')[0]
-    if not chip or len(chip) < 5:
+    if not chip or len(chip) < 10:
         return "❓ Formato Inválido"
 
     for attempt in range(retries + 1):
         try:
             if SIAC_URL not in page.url:
-                try:
-                    await page.goto(SIAC_URL, timeout=60000, wait_until="load")
-                except:
-                    pass
+                await page.goto(SIAC_URL, timeout=60000, wait_until="load")
 
-            # Tempo para o splash screen (Feedback: 2.5s)
+            # Tempo para o splash screen desaparecer
             await asyncio.sleep(3)
 
-            # Encontra o campo de input via Evaluate para ser imune a mudanças de DOM
+            # Encontra e foca o campo
             focused = await page.evaluate("""
                 () => {
                     const inputs = Array.from(document.querySelectorAll('input'));
@@ -296,20 +291,23 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
             if not focused:
                 raise Exception("Campo de input não encontrado")
 
-            # Simula o copy-paste (fill)
+            # Escreve o número
             await page.keyboard.press("Control+A")
             await page.keyboard.press("Backspace")
-            await page.keyboard.type(chip, delay=30)
+            await page.keyboard.type(chip, delay=50)
             
-            # Polling rápido para ler o resultado (SIAC valida ao completar 15 dígitos)
+            # Polling para detectar a resposta
             start_poll = time.time()
             while time.time() - start_poll < 10:
                 content = await page.content()
                 if SIAC_TEXT_MISSING in content:        return "siac_missing"
                 if SIAC_TEXT_REGISTERED in content:     return "siac_registered"
                 if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1)
 
+            # Se falhou o polling, tira screenshot para diagnóstico
+            await page.screenshot(path=f"DEBUG_SIAC_FALHA_{chip}.png")
+            
             if attempt < retries:
                 await page.reload()
                 await asyncio.sleep(2)
@@ -318,6 +316,7 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
             return "siac_unknown"
             
         except Exception as e:
+            await page.screenshot(path=f"DEBUG_SIAC_ERRO_TECNICO.png")
             if attempt < retries:
                 try: await page.goto(SIAC_URL, timeout=60000)
                 except: pass
@@ -552,11 +551,18 @@ async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
                 continue
                 
         except Exception as e:
+            # Screenshot de erro técnico (timeout, crash, etc)
+            try: await page.screenshot(path=f"DEBUG_RNAL_ERRO_{clean_id}.png")
+            except: pass
+            
             if attempt < retries:
                 await asyncio.sleep(2)
                 continue
             return f"⚠️ Erro RNAL"
             
+    # Se chegou aqui sem retornar, é porque não encontrou dados estruturados após as tentativas
+    try: await page.screenshot(path=f"DEBUG_RNAL_SEM_DADOS_{clean_id}.png")
+    except: pass
     return res
 
 # --- CORE ENGINE ---
@@ -581,25 +587,22 @@ async def process_list_incremental(
             nonlocal browser, context, page
             if browser:
                 try: await browser.close()
-                except Exception: pass
-            launch_args = [
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--no-sandbox",
-                "--disable-extensions",
-                "--disable-background-networking",
-                "--disable-renderer-backgrounding",
-            ]
+                except: pass
+            
+            # Launch arguments simplificados para evitar detecção e problemas de memória
+            launch_args = ["--no-sandbox", "--disable-setuid-sandbox"]
+            
             try:
                 browser = await p.chromium.launch(headless=True, args=launch_args)
             except Exception:
                 os.system("playwright install chromium")
                 browser = await p.chromium.launch(headless=True, args=launch_args)
+                
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 viewport={"width": 1280, "height": 800},
             )
-            context.set_default_timeout(60000)
+            context.set_default_timeout(45000)
             page = await context.new_page()
             if init_url:
                 try:
@@ -962,4 +965,28 @@ with tab_olx:
             except Exception as e: st.error(f"Erro ao limpar: {e}")
 
 st.divider()
+
+# --- DEBUG VISUAL SECTION ---
+with st.expander("🛠️ Debug Visual (Ver falhas dos bots)", expanded=False):
+    st.write("Aqui podes ver o que o bot encontrou quando deu erro.")
+    debug_files = [f for f in os.listdir(".") if f.startswith("DEBUG_") and f.endswith(".png")]
+    if not debug_files:
+        st.info("Nenhuma imagem de erro encontrada até agora.")
+    else:
+        for f in debug_files:
+            col_img, col_act = st.columns([4, 1])
+            with col_img:
+                st.image(f, caption=f)
+            with col_act:
+                if st.button("🗑️ Apagar", key=f"del_{f}"):
+                    try:
+                        os.remove(f)
+                        st.rerun()
+                    except: pass
+        if st.button("🧹 Limpar Tudo", key="clear_all_debug"):
+            for f in debug_files:
+                try: os.remove(f)
+                except: pass
+            st.rerun()
+
 st.caption(t("footer"))
