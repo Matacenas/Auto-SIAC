@@ -255,38 +255,69 @@ def batch_clear_rows(ws, rows, condition_func):
 
 # --- SCRAPERS ---
 
+import time
+
 async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
-    """Stable validation for SIAC."""
+    """Valida um microchip no SIAC.pt usando a lógica comprovada do script de verificação."""
+    # Limpeza rigorosa do chip
+    chip = str(microchip).strip().split('.')[0].split(',')[0]
+    if not chip or len(chip) < 10:
+        return "❓ Formato Inválido"
+
     for attempt in range(retries + 1):
         try:
             if SIAC_URL not in page.url:
-                await page.goto(SIAC_URL, timeout=60000, wait_until="networkidle")
+                await page.goto(SIAC_URL, timeout=60000, wait_until="load")
 
-            await page.evaluate("""
+            # Aguarda o splash screen (tempo de segurança)
+            await asyncio.sleep(4)
+
+            # Encontra e foca o campo via JS Evaluate para máxima compatibilidade
+            focused = await page.evaluate("""
                 () => {
                     const inputs = Array.from(document.querySelectorAll('input'));
-                    const target = inputs.find(i => i.placeholder && i.placeholder.toLowerCase().includes('transponder')) || inputs[0];
+                    const target = inputs.find(i => i.placeholder && (i.placeholder.includes('transponder') || i.placeholder.includes('0 |')))
+                                || inputs.find(i => i.type === 'text')
+                                || inputs[0];
                     if (target) {
                         target.value = '';
                         target.focus();
+                        return true;
                     }
+                    return false;
                 }
             """)
-            await page.keyboard.type(str(microchip), delay=60)
-            await page.keyboard.press("Enter")
-            await asyncio.sleep(4.0)
-                
-            content = await page.content()
-            if SIAC_TEXT_MISSING in content: return "siac_missing"
-            if SIAC_TEXT_REGISTERED in content: return "siac_registered"
-            if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
+
+            if not focused:
+                raise Exception("Input não encontrado")
+
+            # Digitação simulada (método que funcionou no script)
+            await page.keyboard.type(chip, delay=40)
             
-            if attempt < retries: await asyncio.sleep(2); continue
+            # Polling para detectar a resposta automática do site
+            start_poll = time.time()
+            while time.time() - start_poll < 12:
+                content = await page.content()
+                if SIAC_TEXT_MISSING in content:        return "siac_missing"
+                if SIAC_TEXT_REGISTERED in content:     return "siac_registered"
+                if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
+                await asyncio.sleep(1)
+
+            if attempt < retries:
+                await page.reload()
+                await asyncio.sleep(2)
+                continue
+                
             return "siac_unknown"
-        except:
-            if attempt < retries: await asyncio.sleep(2); continue
-            return "⚠️ Erro"
-    return "⚠️ Erro"
+            
+        except Exception:
+            if attempt < retries:
+                try: await page.goto(SIAC_URL, timeout=60000)
+                except: pass
+                await asyncio.sleep(2)
+                continue
+            return "⚠️ Erro SIAC"
+    return "⚠️ Erro SIAC"
 
 async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
     """Validates car mileage on OLX with very robust text-based searching."""
@@ -336,29 +367,32 @@ async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
                     return genericMatch ? genericMatch[0].trim() : null;
                 }
             """)
-            if km_val: return km_val
-            
+            if km_val:
+                return km_val
+
             content = (await page.content()).lower()
             if "já não está disponível" in content or "already moderated" in content:
-                # We return a specific code or the translated string directly if we want it in Col D
-                # However, to maintain translation in Col D, we must use the t() function inside the checker
-                # but t() is available in the UI loop. Let's return a unique string that the checker maps.
                 return "ERR_MODERATED"
-            if "ups, algo não está bem" in content or "inactive" in content.lower():
+            if "ups, algo não está bem" in content or "inactive" in content:
                 return "ERR_INACTIVE"
-            if "não se encontra disponível" in content or "anúncio removido" in content or "removed" in content.lower():
+            if "não se encontra disponível" in content or "anúncio removido" in content or "removed" in content:
                 return "ERR_INACTIVE"
-            if attempt < retries: await asyncio.sleep(2); continue
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
             return "ERR_NOT_FOUND"
-        except:
-            if attempt < retries: await asyncio.sleep(2); continue
+        except Exception:
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
             return "⚠️ Erro Conexão"
-    return "⚠️ Erro"
+    return "⚠️ Erro OLX"
 
 async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
-    """Extracts location from OLX ad."""
-    if not ad_id or str(ad_id).lower() == 'nan': return "N/A"
-    
+    """Extracts the city/district location from an OLX ad."""
+    if not ad_id or str(ad_id).lower() == 'nan':
+        return "N/A"
+
     if str(ad_id).isdigit():
         ad_url = f"{OLX_BASE_URL}{ad_id}"
     else:
@@ -368,137 +402,128 @@ async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
         try:
             await page.goto(ad_url, timeout=45000, wait_until="domcontentloaded")
             await asyncio.sleep(4)
-            
+
             location = await page.evaluate("""
                 () => {
                     const blacklist = ['LOCALIZAÇÃO', 'MAP DATA', 'CLICK TO TOGGLE', 'METRIC', 'IMPERIAL', 'UNITS', '©', 'LOJA', 'GEOGR'];
-                    
+
                     const isMetadata = (text) => {
                         if (!text) return true;
                         const t = text.trim();
-                        // Reject if contains distance pattern (e.g. "1 km", "500 m")
+                        // Reject distance patterns (e.g. "1 km", "500 m") and blacklisted UI text
                         if (/\\d+.*km/i.test(t) || /\\d+.*m\\s*$/i.test(t)) return true;
-                        // Reject if contains blacklist words
                         const up = t.toUpperCase();
                         return blacklist.some(b => up.includes(b));
                     };
 
                     const surgicalExtract = (container) => {
                         if (!container) return null;
-                        // Find all direct or deep text nodes/spans
                         const elements = Array.from(container.querySelectorAll('span, a, p'))
                             .map(el => el.innerText.trim())
                             .filter(t => t.length > 2 && !isMetadata(t));
-                        
-                        // Deduplicate and join first 2 unique parts
                         const unique = [...new Set(elements)];
-                        if (unique.length > 0) return unique.slice(0, 2).join(' - ');
-                        return null;
+                        return unique.length > 0 ? unique.slice(0, 2).join(' - ') : null;
                     };
 
-                    // Priority 1: Direct location link
+                    // Priority 1: Direct location data-testid link
                     const locLink = document.querySelector('a[data-testid="ad-location-link"]');
                     if (locLink) {
                         const res = surgicalExtract(locLink);
                         if (res) return res;
                     }
 
-                    // Priority 2: Section search (fallback)
+                    // Priority 2: Find the LOCALIZAÇÃO section header and walk up the DOM
                     const all = Array.from(document.querySelectorAll('span, p, a, div, h2, h3'));
                     const header = all.find(el => el.innerText && el.innerText.trim().toUpperCase() === 'LOCALIZAÇÃO');
                     if (header) {
                         let parent = header.parentElement;
-                        // Go up a few levels to find the container
                         for (let i = 0; i < 3 && parent; i++) {
                             const res = surgicalExtract(parent);
                             if (res) return res;
                             parent = parent.parentElement;
                         }
                     }
-                    
+
                     return null;
                 }
             """)
-            if location: return location
-            if attempt < retries: await asyncio.sleep(2); continue
+            if location:
+                return location
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
             return "❓ Localização"
-        except:
-            if attempt < retries: await asyncio.sleep(2); continue
-            return "⚠️ Conexão"
-    return "⚠️ Erro"
+        except Exception:
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
+            return "⚠️ Conexão OLX"
+    return "⚠️ Erro OLX"
 
 async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
-    """Validates registration in RNAL (Direct detail) with grid fallback."""
+    """Valida um Alojamento Local no RNAL usando a lógica DOM-based que funcionou no script."""
     res = "❓ Sem Dados"
-    rnal_url = f"{RNT_AL_DIRECT_URL}{reg_id}"
+    clean_id = str(reg_id).strip().split('.')[0]
+    rnal_url = f"{RNT_AL_DIRECT_URL}{clean_id}"
+    
     for attempt in range(retries + 1):
         try:
             await page.goto(rnal_url, timeout=45000, wait_until="networkidle")
-            await asyncio.sleep(3) # Give it time to load the record
+            await asyncio.sleep(5) 
             
-            # Try Detail Page Strategy first
-            details = await page.evaluate("""
-                () => {
-                    const getText = (label) => {
-                        const all = Array.from(document.querySelectorAll('span, label, td, b, p, div'));
-                        const target = all.find(l => {
-                            const t = l.innerText ? l.innerText.trim() : "";
-                            return t === label || t === label + ":" || t.startsWith(label + ":");
-                        });
-                        if (target) {
-                            const parent = target.parentElement;
-                            if (parent) {
-                                let text = parent.innerText.replace(label, '').replace(':', '').trim();
-                                if (text.length > 1) return text;
-                            }
-                            const next = target.nextElementSibling;
-                            if (next) return next.innerText.trim();
-                        }
-                        return null;
-                    };
-                    
-                    const address = getText('Morada') || getText('Localização');
-                    const concelho = getText('Concelho');
-                    const freguesia = getText('Freguesia');
-                    
-                    if (address) {
-                        return address + (freguesia ? ' - ' + freguesia : '') + (concelho ? ' (' + concelho + ')' : '');
-                    }
-                    return null;
-                }
-            """)
-            if details:
-                res = details
-                break
-                
-            # Fallback: Grid Strategy (if it lands on search results)
-            grid_res = await page.evaluate("""
-                () => {
-                    const row = document.querySelector('tr.GridRow, tr.GridAlternatingRow, .GridView tr:nth-child(2), table tr:nth-child(2)');
-                    if (row) {
-                        const cells = Array.from(row.querySelectorAll('td'));
-                        if (cells.length > 2) {
-                            // Usually the location is the second to last column or specific column
-                            // We can try to guess or just join relevant info
-                            const text = cells.map(c => c.innerText.trim()).filter(t => t.length > 2).join(' | ');
-                            // Return the last relevant cell if it's long enough
-                            return cells[cells.length - 2].innerText.trim() + " (" + cells[cells.length-3].innerText.trim() + ")";
-                        }
-                    }
-                    return null;
-                }
-            """)
-            if grid_res:
-                res = grid_res
-                break
+            content = await page.content()
+            if "não foram encontrados" in content.lower():
+                return "❌ Não Encontrado"
 
-            if "não foram encontrados" in (await page.content()).lower():
-                res = "❌ Não Encontrado"
-                break
-            if attempt < retries: await asyncio.sleep(2)
-        except: 
-            if attempt < retries: await asyncio.sleep(2)
-            else: res = "⚠️ Erro RNAL"
+            # Estratégia de extração via DOM (mais fiável que regex para este site)
+            data = await page.evaluate("""
+                () => {
+                    const findValue = (label) => {
+                        const all = Array.from(document.querySelectorAll('span, td, div, b, label'));
+                        const target = all.find(el => {
+                            const t = el.innerText ? el.innerText.trim().toUpperCase() : "";
+                            return t === label.toUpperCase() || t === label.toUpperCase() + ":";
+                        });
+                        
+                        if (target) {
+                            const next = target.nextElementSibling;
+                            if (next && next.innerText.trim().length > 1) return next.innerText.trim();
+                            
+                            const parentText = target.parentElement ? target.parentElement.innerText : "";
+                            const val = parentText.replace(new RegExp(label + ":?", "i"), "").trim();
+                            if (val.length > 1) return val;
+                        }
+                        return "";
+                    };
+
+                    const morada = findValue('Morada') || findValue('Designação da via') || findValue('Localização');
+                    const concelho = findValue('Concelho');
+                    const freguesia = findValue('Freguesia');
+                    
+                    if (morada || concelho || freguesia) {
+                        let full = morada || "";
+                        if (freguesia && !full.includes(freguesia)) full += (full ? " - " : "") + freguesia;
+                        if (concelho && !full.includes(concelho)) full += (full ? " (" : "") + concelho + (full.includes("(") ? "" : ")");
+                        return full.trim();
+                    }
+                    return null;
+                }
+            """)
+            
+            if data and len(data) > 3:
+                return data
+
+            if attempt < retries:
+                await page.reload()
+                await asyncio.sleep(2)
+                continue
+                
+        except Exception:
+            if attempt < retries:
+                await asyncio.sleep(2)
+                continue
+            return f"⚠️ Erro RNAL"
+            
     return res
 
 # --- CORE ENGINE ---
@@ -521,14 +546,28 @@ async def process_list_incremental(
         browser, context, page = None, None, None
         async def init_browser():
             nonlocal browser, context, page
-            if browser: await browser.close()
-            try: browser = await p.chromium.launch(headless=True)
-            except:
+            if browser:
+                try: await browser.close()
+                except: pass
+            
+            # Lançamento ultra-puro (Sem flags que causem conflitos de memória/crash)
+            try:
+                browser = await p.chromium.launch(headless=True)
+            except Exception:
                 os.system("playwright install chromium")
                 browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 800},
+            )
+            context.set_default_timeout(60000)
             page = await context.new_page()
-            if init_url: await page.goto(init_url, timeout=60000, wait_until="networkidle")
+            if init_url:
+                try:
+                    await page.goto(init_url, timeout=90000, wait_until="load")
+                except Exception:
+                    pass  # Proceed even if load times out (background scripts)
 
         await init_browser()
         total = len(items)
@@ -563,6 +602,7 @@ async def process_list_incremental(
             if not str(check_val).strip() or str(check_val).lower() == "nan": res = "N/A"
             else:
                 status_text.text(t("status_working", status_display))
+                if page and page.is_closed(): await init_browser()
                 res = await checker_func(page, cleaned, **extra_params)
             
             results[i] = res
@@ -884,4 +924,5 @@ with tab_olx:
             except Exception as e: st.error(f"Erro ao limpar: {e}")
 
 st.divider()
+
 st.caption(t("footer"))
