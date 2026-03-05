@@ -228,27 +228,40 @@ async def check_siac_on_page(page, microchip: str, log_func: Callable = None) ->
             await page.keyboard.press("Enter")
             log(f"Consultando chip {chip}...")
             
-            # Polling for result (Increased timeout and flexible matching)
+            # Polling for result (Surgical targeting with chip-sync check)
             start = time.time()
             tried_click = False
-            while time.time() - start < 35:
+            while time.time() - start < 40:
                 res = await page.evaluate(f"""() => {{
-                    const t = document.body.innerText;
+                    const bodyText = document.body.innerText;
                     const clean = (s) => s.normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
-                    const tc = clean(t);
-                    if (tc.includes("desaparecido") || tc.includes("encontra desaparecido")) return "siac_missing";
+                    const tc = clean(bodyText);
+                    
+                    // IF we see "Não foram encontrados resultados", return sem registo
+                    if (tc.includes("nao foram encontrados resultados") || tc.includes("nao existe nenhum animal")) return "siac_not_registered";
+                    
+                    // Conclusive boxes (SIAC uses specific alert classes usually)
+                    const hasResultBox = document.querySelector('.alert-success, .alert-danger, .alert-warning, .card-body');
+                    if (!hasResultBox && !tc.includes("resultado")) return "polling";
+
+                    // Result logic
+                    if (tc.includes("encontra desaparecido") || tc.includes("animal desaparecido")) return "siac_missing";
                     if (tc.includes("com registo") || tc.includes("animal com registo")) return "siac_registered";
                     if (tc.includes("sem registo") || tc.includes("animal sem registo")) return "siac_not_registered";
+                    
                     return "polling";
                 }}""")
-                if res != "polling": return res
                 
-                # If stuck after 10s, try clicking the button again
+                if res != "polling": 
+                    log(f"Resultado final detectado: {res}")
+                    return res
+                
                 if time.time() - start > 12 and not tried_click:
+                    log("Ainda sem resposta... forçando clique novamente.")
                     await page.keyboard.press("Enter")
                     tried_click = True
-                await asyncio.sleep(1.5)
-            log("Timeout no portal SIAC (35s).")
+                await asyncio.sleep(2)
+            log("Timeout no portal SIAC (40s).")
             return "siac_error"
         except Exception as e:
             log(f"Erro: {str(e)[:50]}")
@@ -317,26 +330,29 @@ async def check_rnt_rnal_only(page, reg_id: str, log_func: Callable = None) -> s
                         const all = Array.from(document.querySelectorAll('.TableRecords_Label, td, span, div, b'));
                         const l = all.find(el => {
                             const t = el.innerText.trim();
-                            return (t === label || t === label + ':') && !el.innerText.toLowerCase().includes('email');
+                            // STRICT match for "Morada" only, excluding emails or other labels
+                            return (t === label || t === label + ':') && 
+                                   !el.innerText.toLowerCase().includes('email') &&
+                                   !el.innerText.toLowerCase().includes('electronico');
                         });
                         if (!l) return null;
                         
-                        // Table format check
-                        if (l.nextElementSibling && (l.tagName === 'TD' || l.tagName === 'B')) return l.nextElementSibling.innerText.trim();
+                        // Check if it's a table with value in next TD
+                        if (l.tagName === 'TD' && l.nextElementSibling) {
+                             const val = l.nextElementSibling.innerText.trim();
+                             if (val.includes('@') && !val.includes(' ')) return null; // Skip if looks like email
+                             return val;
+                        }
                         
-                        // Label: Value format check in same line
+                        // Case: Morada: Value in same block
                         const pText = l.parentElement.innerText;
-                        const match = pText.match(new RegExp(label + ":?\\\\s*(.*)", "i"));
-                        if (match && match[1].trim().length > 3) return match[1].trim();
+                        const match = pText.match(new RegExp(label + ":?\\\\s*([^\\\\n@]+)", "i"));
+                        if (match && match[1].trim().length > 5) return match[1].trim();
                         
-                        // Fallback: look at next element in DOM
-                        const next = l.nextSibling;
-                        if (next && next.nodeType === 3) return next.textContent.trim();
                         return null;
                     };
                     
                     const m = findValue('Morada');
-                    // Stricter anti-email: must NOT contain @ if it's supposed to be a physical address (or have spaces)
                     if (m && m.length > 5 && (m.includes(' ') || !m.includes('@'))) return m;
                     return null;
                 }""")
