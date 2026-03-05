@@ -255,79 +255,57 @@ def batch_clear_rows(ws, rows, condition_func):
 
 # --- SCRAPERS ---
 
-async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
-    """Validates a microchip on SIAC.pt. Returns a translation key or error string."""
+async def check_siac_on_page(page, microchip: str, retries: int = 2) -> str:
+    """Validates a microchip on SIAC.pt. Returns a translation key or error string.
+
+    Uses JavaScript evaluate() to fill the form, bypassing Playwright's selector
+    engine. This is the most resilient approach for JS-heavy SPAs (Angular/React)
+    that have loading splash screens which can re-render and clear typed values.
+    """
+    chip = str(microchip).strip()
     for attempt in range(retries + 1):
         try:
-            # Phase 1: Navigate if not already on SIAC.
+            # Step 1: Navigate to SIAC if not already there.
             if SIAC_URL not in page.url:
                 try:
                     await page.goto(SIAC_URL, timeout=90000, wait_until="load")
                 except Exception:
-                    # 'load' may time out due to background analytics scripts — that's fine.
-                    # domcontentloaded has already fired; the form will be ready.
-                    pass
+                    pass  # Timeout from background analytics is fine — DOM is ready.
 
-            # Phase 2: Wait for the SIAC splash/loading screen to fully DISAPPEAR.
-            # SIAC.pt shows a ~1s black overlay before the search form becomes interactive.
-            # If we interact before it finishes, the form re-renders and clears our input.
-            splash_selectors = [
-                ".loading", ".loading-overlay", ".preloader", ".splash",
-                "#loading", "#preloader", "#splash",
-                "[class*='loading']", "[class*='preload']", "[class*='spinner']",
-            ]
-            for splash_sel in splash_selectors:
-                try:
-                    await page.wait_for_selector(splash_sel, state="hidden", timeout=6000)
-                    break  # Found and confirmed hidden — that's the splash
-                except Exception:
-                    continue  # Selector not found or already gone — try next
+            # Step 2: Wait for the splash screen and Angular bootstrap to finish.
+            # SIAC.pt has a ~2s black loading overlay. We must not touch the form before it ends
+            # or the SPA re-renders the component and wipes whatever we typed.
+            await asyncio.sleep(3)
 
-            # Buffer for CSS transitions that may follow the splash disappearing
-            await asyncio.sleep(1.5)
+            # Step 3: Inject the microchip number directly via JavaScript.
+            # This finds the transponder input by placeholder text (known: '0 | 15') or type,
+            # then fires Angular/React/Vue change events so the framework registers the value.
+            await page.evaluate(f"""
+                () => {{
+                    const inputs = Array.from(document.querySelectorAll('input'));
+                    const inp = inputs.find(i =>
+                                    i.placeholder && (
+                                        i.placeholder.toLowerCase().includes('transponder') ||
+                                        i.placeholder.toLowerCase().includes('chip') ||
+                                        i.placeholder.includes('15')
+                                    )
+                                )
+                                || inputs.find(i => i.type === 'text')
+                                || inputs[0];
+                    if (inp) {{
+                        inp.focus();
+                        inp.value = '';
+                        inp.dispatchEvent(new Event('input',  {{ bubbles: true }}));
+                        inp.value = '{chip}';
+                        inp.dispatchEvent(new Event('input',  {{ bubbles: true }}));
+                        inp.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                }}
+            """)
 
-            # Phase 3: Wait for the search input to be stable and interactable.
-            input_selector = 'input[placeholder*="transponder" i], input[placeholder*="chip" i], input[type="text"]'
-            try:
-                await page.wait_for_selector(input_selector, timeout=20000, state="visible")
-                await asyncio.sleep(0.5)  # Extra tick to ensure the field is stable
-            except Exception:
-                await asyncio.sleep(3)  # Last-resort buffer if selector not found
-
-            # Phase 4: Fill the microchip value and VERIFY it stuck before submitting.
-            # The verification is the key guard against the splash re-render issue.
-            filled = False
-            for sel in [input_selector, 'input[type="text"]', 'input']:
-                try:
-                    await page.fill(sel, "", timeout=4000)               # Clear the field
-                    await page.fill(sel, str(microchip), timeout=4000)   # Type the value
-                    typed_val = await page.input_value(sel)              # Read it back
-                    if str(microchip) in typed_val:
-                        filled = True
-                        break
-                except Exception:
-                    continue
-
-            if not filled:
-                # Keyboard fallback: focus via JS then type character-by-character
-                await page.evaluate("""
-                    () => {
-                        const inp = document.querySelector('input[type="text"]') || document.querySelector('input');
-                        if (inp) { inp.value = ''; inp.focus(); }
-                    }
-                """)
-                await page.keyboard.type(str(microchip), delay=80)
-
+            # Step 4: Submit and wait for the result.
             await page.keyboard.press("Enter")
-
-            # Phase 5: Wait for a known SIAC result string to appear (up to 12s).
-            # This replaces fixed sleeps — we stop waiting the moment a result is ready.
-            result_texts = [SIAC_TEXT_REGISTERED, SIAC_TEXT_NOT_REGISTERED, SIAC_TEXT_MISSING]
-            result_selector = ", ".join(f'*:has-text("{txt}")' for txt in result_texts)
-            try:
-                await page.wait_for_selector(result_selector, timeout=12000, state="attached")
-            except Exception:
-                await asyncio.sleep(5)  # Graceful fallback if selector doesn't match
+            await asyncio.sleep(5)  # SIAC typically responds within 3-5 seconds
 
             content = await page.content()
             if SIAC_TEXT_MISSING in content:        return "siac_missing"
@@ -335,11 +313,20 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
             if SIAC_TEXT_NOT_REGISTERED in content: return "siac_not_registered"
 
             if attempt < retries:
-                await asyncio.sleep(2)
+                # Force reload to clear stale state before retrying
+                try:
+                    await page.goto(SIAC_URL, timeout=60000, wait_until="load")
+                except Exception:
+                    pass
+                await asyncio.sleep(3)
                 continue
             return "siac_unknown"
         except Exception:
             if attempt < retries:
+                try:
+                    await page.goto(SIAC_URL, timeout=60000, wait_until="load")
+                except Exception:
+                    pass
                 await asyncio.sleep(2)
                 continue
             return "⚠️ Erro SIAC"
