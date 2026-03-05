@@ -260,7 +260,7 @@ async def check_siac_on_page(page, microchip: str, retries: int = 1) -> str:
     for attempt in range(retries + 1):
         try:
             if SIAC_URL not in page.url:
-                await page.goto(SIAC_URL, timeout=60000, wait_until="domcontentloaded")
+                await page.goto(SIAC_URL, timeout=60000, wait_until="commit")
                 try:
                     await page.wait_for_selector("input", timeout=15000)
                 except:
@@ -533,7 +533,9 @@ async def process_list_incremental(
                 browser = await p.chromium.launch(headless=True, args=launch_args)
             context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             page = await context.new_page()
-            if init_url: await page.goto(init_url, timeout=60000, wait_until="domcontentloaded")
+            if init_url: 
+                try: await page.goto(init_url, timeout=60000, wait_until="commit")
+                except: pass
 
         await init_browser()
         total = len(items)
@@ -568,6 +570,7 @@ async def process_list_incremental(
             if not str(check_val).strip() or str(check_val).lower() == "nan": res = "N/A"
             else:
                 status_text.text(t("status_working", status_display))
+                if page and page.is_closed(): await init_browser()
                 res = await checker_func(page, cleaned, **extra_params)
             
             results[i] = res
