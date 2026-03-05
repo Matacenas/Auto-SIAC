@@ -317,8 +317,22 @@ async def check_rnt_rnal_only(page, reg_id: str, log_func: Callable = None) -> s
         return "❓ Sem Dados"
     except: return "⚠️ Erro RNT"
 
-# --- ENGINE (STABLE RESTORED) ---
+# --- BROWSER INSTALLER ---
+def install_playwright_browsers():
+    """Hook para garantir que os browsers estão instalados no Streamlit Cloud."""
+    if "browsers_installed" not in st.session_state:
+        with st.spinner("🔧 A configurar ambiente (Playwright)..."):
+            try:
+                import subprocess
+                # Tenta instalar apenas o chromium para ser mais rápido
+                subprocess.run(["python", "-m", "playwright", "install", "chromium"], check=True)
+                st.session_state.browsers_installed = True
+            except Exception as e:
+                st.error(f"Erro na instalação dos browsers: {e}")
+
+# --- ENGINE (STABLE RESTORED + CLOUD FIX) ---
 async def process_list_incremental(items, checker_func, ws, col_mappings, init_url=None, refresh_every=50, existing_data=None, **extra_params):
+    install_playwright_browsers()
     total = len(items)
     pb = st.progress(0)
     st.subheader("🖥️ Console Debug LIVE")
