@@ -10,7 +10,7 @@ from typing import List, Optional, Callable, Awaitable, Any
 
 # --- CONFIGURATION ---
 LINKS_FILE = "links.json"
-GLOBAL_DEFAULT_URL = "https://docs.google.com/spreadsheets/d/17sq7E56TExN8Icw9Du2oUiuzhLDzfb4VmTgFmJGS1Do"
+GLOBAL_DEFAULT_URL = "https://docs.google.com/spreadsheets/d/1LDOJUHEt1xrXnNcrK9O9z5P44amrVuXCkeAse-YLT0E"
 
 def load_links():
     if os.path.exists(LINKS_FILE):
@@ -583,9 +583,9 @@ with tab_siac:
             if gc:
                 try:
                     sh = gc.open_by_url(url_gs)
-                    ws = get_worksheet_by_name(sh, "AUTO SIAC")
+                    ws = get_worksheet_by_name(sh, "Animais")
                     if not ws:
-                        st.error("ERRO: Aba 'AUTO SIAC' não encontrada no ficheiro!")
+                        st.error("ERRO: Aba 'Animais' não encontrada no ficheiro!")
                         st.stop()
                     femeas = ws.col_values(7)[1:] # G
                     crias = ws.col_values(8)[1:]  # H
@@ -616,7 +616,7 @@ with tab_siac:
                         gc_i = get_gspread_client()
                         if gc_i:
                             sh_i = gc_i.open_by_url(url_gs)
-                            ws_i = get_worksheet_by_name(sh_i, "AUTO SIAC")
+                            ws_i = get_worksheet_by_name(sh_i, "Animais")
                             if ws_i:
                                 ws_i.update(range_name=f"I2:I{1+len(sf)}", values=sf)
                                 ws_i.update(range_name=f"J2:J{1+len(sc)}", values=sc)
@@ -634,7 +634,7 @@ with tab_siac:
                 gc = get_gspread_client()
                 if gc:
                     sh = gc.open_by_url(url_gs)
-                    ws = get_worksheet_by_name(sh, "AUTO SIAC")
+                    ws = get_worksheet_by_name(sh, "Animais")
                     with st.spinner(t("cleaning")):
                         data = ws.get_all_values()
                         def is_siac_done(row):
@@ -662,9 +662,9 @@ with tab_rnt:
             if gc:
                 try:
                     sh = gc.open_by_url(url_gs)
-                    ws = get_worksheet_by_name(sh, "AUTO RNAL")
+                    ws = get_worksheet_by_name(sh, "Imóveis")
                     if not ws:
-                        st.error("ERRO: Aba 'AUTO RNAL' não encontrada no ficheiro!")
+                        st.error("ERRO: Aba 'Imóveis' não encontrada no ficheiro!")
                         st.stop()
                     olx_ids = ws.col_values(1)[1:] # A
                     rnal_ids = ws.col_values(4)[1:] # D
@@ -691,7 +691,7 @@ with tab_rnt:
                         gc_u = get_gspread_client()
                         if gc_u:
                             sh_u = gc_u.open_by_url(url_gs)
-                            ws_u = get_worksheet_by_name(sh_u, "AUTO RNAL")
+                            ws_u = get_worksheet_by_name(sh_u, "Imóveis")
                             if ws_u:
                                 olx_formatted = [[r[0]] for r in results]
                                 rnal_formatted = [[r[1]] for r in results]
@@ -737,7 +737,7 @@ with tab_rnt:
                 gc = get_gspread_client()
                 if gc:
                     sh = gc.open_by_url(url_gs)
-                    ws = get_worksheet_by_name(sh, "AUTO RNAL")
+                    ws = get_worksheet_by_name(sh, "Imóveis")
                     with st.spinner(t("cleaning")):
                         data = ws.get_all_values()
                         def is_rnal_done(row):
@@ -761,9 +761,9 @@ with tab_olx:
             if gc:
                 try:
                     sh = gc.open_by_url(url_gs)
-                    ws = get_worksheet_by_name(sh, "Auto Km")
+                    ws = get_worksheet_by_name(sh, "Carros")
                     if not ws:
-                        st.error("ERRO: Aba 'Auto Km' não encontrada no ficheiro!")
+                        st.error("ERRO: Aba 'Carros' não encontrada no ficheiro!")
                         st.stop()
                     ids = ws.col_values(1)[1:] # Column A
                     system_km = ws.col_values(3)[1:] # Col C (User provided)
@@ -786,7 +786,7 @@ with tab_olx:
                         gc_u = get_gspread_client()
                         if gc_u:
                             sh_u = gc_u.open_by_url(url_gs)
-                            ws_u = get_worksheet_by_name(sh_u, "Auto Km")
+                            ws_u = get_worksheet_by_name(sh_u, "Carros")
                             if ws_u:
                                 bot_km_fmt = [[r[0]] for r in results]
                                 val_fmt = [[r[1]] for r in results]
@@ -855,7 +855,7 @@ with tab_olx:
                 gc = get_gspread_client()
                 if gc:
                     sh = gc.open_by_url(url_gs)
-                    ws = get_worksheet_by_name(sh, "Auto Km")
+                    ws = get_worksheet_by_name(sh, "Carros")
                     with st.spinner(t("cleaning")):
                         data = ws.get_all_values()
                         def is_olx_cleanup(row):
