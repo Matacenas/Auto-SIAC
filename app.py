@@ -528,7 +528,7 @@ async def process_list_incremental(
             # Skip if we have a result. Placeholder "..." or empty string doesn't count.
             # Skip if we have a definitive result. Placeholder "..." or empty string doesn't count.
             terminal_states = ["✅", "❌", "🚩"]
-            val_to_check = str(results[i][1]) if isinstance(results[i], (tuple, list)) else str(results[i])
+            val_to_check = str(results[i][-1]) if isinstance(results[i], (tuple, list)) else str(results[i])
             has_result = any(s in val_to_check for s in terminal_states)
             if i < len(results) and has_result:
                 progress_bar.progress((i + 1) / total)
@@ -705,7 +705,7 @@ with tab_rnt:
                                     olx_l, rnt_l = str(r[0]).lower(), str(r[1]).lower()
                                     if rnt_l == "n/a" or not rnt_l or "sem dados" in rnt_l:
                                         val_formatted.append([t("val_waiting")])
-                                    elif any(s in str(r[0]) or s in str(r[1]) for s in ["...", "⚠️", "❓"]):
+                                    elif str(r[0]) == "..." or str(r[1]) == "..." or any(s in str(r[0]) or s in str(r[1]) for s in ["⚠️", "❓"]):
                                         val_formatted.append(["..."])
                                     elif olx_l != "n/a" and any(word in rnt_l for word in olx_l.split() if len(word) > 3): 
                                         val_formatted.append([t("val_correct")])
