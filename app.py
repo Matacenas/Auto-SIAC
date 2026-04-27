@@ -62,7 +62,7 @@ TRANSLATIONS = {
         "err_no_url": "Insira o URL.",
         "err_no_sheet": "ERRO: Aba '{}' não encontrada no ficheiro!",
         "dica_siac": "💡 **Processo de Validação:**\n\n1. Lê os dados das Colunas G e H.\n2. Realiza a validação automática do microchip no site do SIAC.pt.\n3. Regista o resultado da validação nas Colunas I e J.",
-        "dica_rnal": "💡 **Processo de Validação:**\n\n1. Lê o ID do anúncio na Coluna A.\n2. Faz scraping da localização do anúncio em olx.pt e regista o resultado na Coluna C.\n3. Lê o Número de Alojamento Local da Coluna D e valida no site do RNAL:\n   https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr=AdID\n4. Faz scraping do resultado da validação e regista a informação na Coluna E.\n5. Compara a localização do OLX com a do RNAL e regista a sugestão na Coluna F.",
+        "dica_rnal": "💡 **Processo de Validação:**\n\n1. Lê o ID do anúncio na Coluna A.\n2. Lê a localização do anúncio da Coluna C.\n3. Lê o Número de Alojamento Local da Coluna D e valida no site do RNAL:\n   https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr=AdID\n4. Faz scraping do resultado da validação e regista a informação na Coluna E.\n5. Compara a localização do OLX com a do RNAL e regista a sugestão na Coluna F.",
         "dica_olx": "💡 **Processo de Validação:**\n\n1. Lê o ID do anúncio na Coluna A.\n2. Acede a olx.pt e faz scraping dos quilómetros apresentados no anúncio (LIVE).\n3. Regista os quilómetros obtidos na Coluna D.\n4. Compara os valores da Coluna C com os da Coluna D.\n5. Regista o resultado da validação na Coluna E.",
         "restarting_browser": "♻️ Reiniciando navegador para estabilidade...",
         "val_waiting": "⚠️ Sem resultado - Confirmar no RNET ⚠️",
@@ -105,7 +105,7 @@ TRANSLATIONS = {
         "err_no_url": "Please enter the URL.",
         "err_no_sheet": "ERROR: Sheet '{}' not found in the file!",
         "dica_siac": "💡 **Workflow:**\n\n1. Reads data from Columns G and H.\n2. Performs automatic microchip validation on the SIAC.pt website.\n3. Records the validation result in Columns I and J.",
-        "dica_rnal": "💡 **Workflow:**\n\n1. Reads the ad ID from Column A.\n2. Scrapes the ad location on olx.pt and records the result in Column C.\n3. Reads the Local Accommodation Number from Column D and validates it on the RNAL website:\n   https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr=AdID\n4. Scrapes the validation result and records the information in Column E.\n5. Compares the OLX location with the RNAL location and records the suggestion in Column F.",
+        "dica_rnal": "💡 **Workflow:**\n\n1. Reads the ad ID from Column A.\n2. Reads the ad location from Column C.\n3. Reads the Local Accommodation Number from Column D and validates it on the RNAL website:\n   https://rnt.turismodeportugal.pt/RNT/RNAL.aspx?nr=AdID\n4. Scrapes the validation result and records the information in Column E.\n5. Compares the OLX location with the RNAL location and records the suggestion in Column F.",
         "dica_olx": "💡 **Workflow:**\n\n1. Reads the ad ID from Column A.\n2. Accesses olx.pt and scrapes the Kilometers presented in the ad (LIVE).\n3. Records the obtained Kilometers in Column D.\n4. Compares the values in Column C with those in Column D.\n5. Records the validation result in Column E.",
         "restarting_browser": "♻️ Restarting browser for stability...",
         "val_waiting": "⚠️ No result - Confirm on RNET ⚠️",
@@ -351,77 +351,6 @@ async def check_olx_km(page, ad_id: str, retries: int = 2) -> str:
             return "⚠️ Erro Conexão"
     return "⚠️ Erro"
 
-async def check_olx_location(page, ad_id: str, retries: int = 2) -> str:
-    """Extracts location from OLX ad."""
-    if not ad_id or str(ad_id).lower() == 'nan': return "N/A"
-    
-    if str(ad_id).isdigit():
-        ad_url = f"{OLX_BASE_URL}{ad_id}"
-    else:
-        ad_url = ad_id if str(ad_id).startswith('http') else f"{OLX_BASE_URL}d/anuncio/{ad_id}.html"
-
-    for attempt in range(retries + 1):
-        try:
-            await page.goto(ad_url, timeout=45000, wait_until="domcontentloaded")
-            await asyncio.sleep(4)
-            
-            location = await page.evaluate("""
-                () => {
-                    const blacklist = ['LOCALIZAÇÃO', 'MAP DATA', 'CLICK TO TOGGLE', 'METRIC', 'IMPERIAL', 'UNITS', '©', 'LOJA', 'GEOGR'];
-                    
-                    const isMetadata = (text) => {
-                        if (!text) return true;
-                        const t = text.trim();
-                        // Reject if contains distance pattern (e.g. "1 km", "500 m")
-                        if (/\\d+.*km/i.test(t) || /\\d+.*m\\s*$/i.test(t)) return true;
-                        // Reject if contains blacklist words
-                        const up = t.toUpperCase();
-                        return blacklist.some(b => up.includes(b));
-                    };
-
-                    const surgicalExtract = (container) => {
-                        if (!container) return null;
-                        // Find all direct or deep text nodes/spans
-                        const elements = Array.from(container.querySelectorAll('span, a, p'))
-                            .map(el => el.innerText.trim())
-                            .filter(t => t.length > 2 && !isMetadata(t));
-                        
-                        // Deduplicate and join first 2 unique parts
-                        const unique = [...new Set(elements)];
-                        if (unique.length > 0) return unique.slice(0, 2).join(' - ');
-                        return null;
-                    };
-
-                    // Priority 1: Direct location link
-                    const locLink = document.querySelector('a[data-testid="ad-location-link"]');
-                    if (locLink) {
-                        const res = surgicalExtract(locLink);
-                        if (res) return res;
-                    }
-
-                    // Priority 2: Section search (fallback)
-                    const all = Array.from(document.querySelectorAll('span, p, a, div, h2, h3'));
-                    const header = all.find(el => el.innerText && el.innerText.trim().toUpperCase() === 'LOCALIZAÇÃO');
-                    if (header) {
-                        let parent = header.parentElement;
-                        // Go up a few levels to find the container
-                        for (let i = 0; i < 3 && parent; i++) {
-                            const res = surgicalExtract(parent);
-                            if (res) return res;
-                            parent = parent.parentElement;
-                        }
-                    }
-                    
-                    return null;
-                }
-            """)
-            if location: return location
-            if attempt < retries: await asyncio.sleep(2); continue
-            return "❓ Localização"
-        except:
-            if attempt < retries: await asyncio.sleep(2); continue
-            return "⚠️ Conexão"
-    return "⚠️ Erro"
 
 async def check_rnt_rnal_only(page, reg_id: str, retries: int = 1) -> str:
     """Validates registration in RNAL (Direct detail) with grid fallback."""
@@ -693,7 +622,6 @@ with tab_rnt:
                             sh_u = gc_u.open_by_url(url_gs)
                             ws_u = get_worksheet_by_name(sh_u, "Imóveis")
                             if ws_u:
-                                olx_formatted = [[r[0]] for r in results]
                                 rnal_formatted = [[r[1]] for r in results]
                                 val_formatted = []
                                 for r in results:
@@ -711,19 +639,17 @@ with tab_rnt:
                                         val_formatted.append([t("val_correct")])
                                     else: val_formatted.append([t("val_wrong")])
                                     
-                                ws_u.update(range_name=f"C2:C{1+len(olx_formatted)}", values=olx_formatted) # OLX Loc
                                 ws_u.update(range_name=f"E2:E{1+len(rnal_formatted)}", values=rnal_formatted) # RNAL Data
                                 ws_u.update(range_name=f"F2:F{1+len(val_formatted)}", values=val_formatted) # Validation
                     
                     async def al_checker(page, ids_tuple):
-                        o_id, r_id = ids_tuple
-                        olx_loc = await check_olx_location(page, o_id)
+                        olx_loc, r_id = ids_tuple
                         rnt_data = await check_rnt_rnal_only(page, r_id)
                         # Return 3-tuple to match combined_existing format
                         return (olx_loc, rnt_data, "")
 
                     with st.spinner(""):
-                        combined_ids = list(zip(olx_ids, rnal_ids))
+                        combined_ids = list(zip(existing_olx_loc, rnal_ids))
                         asyncio.run(process_list_incremental(combined_ids, al_checker, callback=update_al_gs, existing_results=combined_existing))
                     st.success(t("status_done"))
                     st.balloons()
